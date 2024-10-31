@@ -1,6 +1,7 @@
 import asyncio
 from collections import namedtuple
 from functools import partial, wraps
+from time import perf_counter
 from typing import Callable, List
 
 import supervisely as sly
@@ -57,10 +58,56 @@ ImageInfoLite = namedtuple(
         TupleFields.DATASET_ID,
         TupleFields.FULL_URL,
         TupleFields.CAS_URL,
-        TupleFields.HDF5_URL,
         TupleFields.UPDATED_AT,
     ],
 )
+
+
+def timeit(func: Callable) -> Callable:
+    """Decorator to measure the execution time of the function.
+    Works with both async and sync functions.
+
+    :param func: Function to measure the execution time of.
+    :type func: Callable
+    :return: Decorated function.
+    :rtype: Callable
+    """
+
+    if asyncio.iscoroutinefunction(func):
+
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            start_time = perf_counter()
+            result = await func(*args, **kwargs)
+            end_time = perf_counter()
+            execution_time = end_time - start_time
+            sly.logger.debug(f"{execution_time:.4f} sec | {func.__name__}")
+            return result
+
+        return async_wrapper
+    else:
+
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            start_time = perf_counter()
+            result = func(*args, **kwargs)
+            end_time = perf_counter()
+            execution_time = end_time - start_time
+            _log_execution_time(func.__name__, execution_time)
+            return result
+
+        return sync_wrapper
+
+
+def _log_execution_time(function_name: str, execution_time: float) -> None:
+    """Log the execution time of the function.
+
+    :param function_name: Name of the function.
+    :type function_name: str
+    :param execution_time: Execution time of the function.
+    :type execution_time: float
+    """
+    sly.logger.debug(f"{execution_time:.4f} sec | {function_name}")
 
 
 def to_thread(func: Callable) -> Callable:
@@ -131,7 +178,7 @@ def with_retries(
 
 
 @to_thread
-@sly.timeit
+@timeit
 def get_datasets(api: sly.Api, project_id: int) -> List[sly.DatasetInfo]:
     """Returns list of datasets from the project.
 
@@ -146,11 +193,10 @@ def get_datasets(api: sly.Api, project_id: int) -> List[sly.DatasetInfo]:
 
 
 @to_thread
-@sly.timeit
+@timeit
 def get_image_infos(
     api: sly.Api,
     cas_size: int,
-    hdf5_size: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
 ) -> List[ImageInfoLite]:
@@ -163,8 +209,6 @@ def get_image_infos(
     :type api: sly.Api
     :param cas_size: Size of the image for CAS, it will be added to URL.
     :type cas_size: int
-    :param hdf5_size: Size of the image for HDF5, it will be added to URL.
-    :type hdf5_size: int
     :param dataset_id: ID of the dataset to get images from.
     :type dataset_id: int, optional
     :param image_ids: List of image IDs to get image infos.
@@ -188,12 +232,6 @@ def get_image_infos(
                 method="fit",
                 width=cas_size,
                 height=cas_size,
-            ),
-            hdf5_url=resize_image_url(
-                image_info.full_storage_url,
-                method="fit",
-                width=hdf5_size,
-                height=hdf5_size,
             ),
             updated_at=image_info.updated_at,
         )

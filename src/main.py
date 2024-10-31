@@ -6,13 +6,17 @@ import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.events import Event
-from src.utils import ImageInfoLite, get_datasets, get_image_infos
+from src.utils import ImageInfoLite, get_datasets, get_image_infos, timeit
 
 app = sly.Application()
 
+# This will enable Advanced Debugging mode only in development mode.
+# Do not need to remove it in production, since it will be ignored.
+sly.app.development.enable_advanced_debug()
+
 
 @app.event(Event.Embeddings, use_state=True)
-@sly.timeit
+@timeit
 async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     sly.logger.info(
         f"Started creating embeddings for project {event.project_id}. "
@@ -23,7 +27,6 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         # Step 1: If force is True, delete the collection and recreate it.
         sly.logger.debug(f"Force enabled, deleting collection {event.project_id}.")
         await qdrant.delete_collection(event.project_id)
-        sly.logger.debug(f"Deleting HDF5 file for project {event.project_id}.")
 
     # Step 2: Ensure collection exists in Qdrant.
     await qdrant.get_or_create_collection(event.project_id)
@@ -43,7 +46,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
 
 @app.event(Event.Search, use_state=True)
-@sly.timeit
+@timeit
 async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     sly.logger.info(
         f"Searching for similar images in project {event.project_id}. "
@@ -64,7 +67,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
 
 
 @app.event(Event.Diverse, use_state=True)
-@sly.timeit
+@timeit
 async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     sly.logger.info(
         f"Generating diverse population for project {event.project_id}. "
@@ -82,7 +85,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     return image_infos
 
 
-@sly.timeit
+@timeit
 async def process_images(
     api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
 ) -> None:
@@ -105,7 +108,6 @@ async def process_images(
     image_infos = await get_image_infos(
         api,
         g.IMAGE_SIZE_FOR_CAS,
-        g.IMAGE_SIZE_FOR_ATLAS,
         dataset_id=dataset_id,
         image_ids=image_ids,
     )
@@ -117,7 +119,7 @@ async def process_images(
     await image_infos_to_db(project_id, qdrant_diff)
 
 
-@sly.timeit
+@timeit
 async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -> None:
     """Save image infos to the database.
 

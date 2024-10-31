@@ -5,7 +5,7 @@ import supervisely as sly
 from clip_client import Client
 
 import src.globals as g
-from src.utils import with_retries
+from src.utils import timeit, with_retries
 
 client = Client(f"grpc://{g.cas_host}")
 
@@ -18,7 +18,7 @@ except Exception as e:
 
 
 @with_retries(retries=5, sleep_time=2)
-@sly.timeit
+@timeit
 async def get_vectors(queries: List[str]) -> List[np.ndarray]:
     """Use CAS to get vectors from the list of queries.
     List of queries is a list of URLs for images or text prompts.

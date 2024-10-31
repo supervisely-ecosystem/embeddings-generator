@@ -12,6 +12,10 @@ sly.logger.debug(f"Connected to Supervisely API: {api.server_address}.")
 api.file.load_dotenv_from_teamfiles(override=True)
 
 # region envvars
+team_id = sly.env.team_id()
+workspace_id = sly.env.workspace_id()
+sly.logger.debug(f"Team ID: {team_id}, Workspace ID: {workspace_id}")
+
 # The first option (modal.state) comes from the Modal window, the second one (QDRANT_HOST)
 # comes from the .env file.
 qdrant_host = os.getenv("modal.state.qdrantHost") or os.getenv("QDRANT_HOST")

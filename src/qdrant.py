@@ -11,7 +11,7 @@ from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
 from sklearn.cluster import KMeans
 
 import src.globals as g
-from src.utils import ImageInfoLite, QdrantFields, TupleFields, with_retries
+from src.utils import ImageInfoLite, QdrantFields, TupleFields, timeit, with_retries
 
 client = AsyncQdrantClient(g.qdrant_host)
 
@@ -39,7 +39,7 @@ async def delete_collection(collection_name: str) -> None:
 
 
 @with_retries()
-@sly.timeit
+@timeit
 async def get_or_create_collection(
     collection_name: str, size: int = 512, distance: Distance = Distance.COSINE
 ) -> CollectionInfo:
@@ -68,7 +68,7 @@ async def get_or_create_collection(
 
 
 @with_retries()
-@sly.timeit
+@timeit
 async def get_items_by_ids(
     collection_name: str, image_ids: List[int], with_vectors: bool = False
 ) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
@@ -94,7 +94,7 @@ async def get_items_by_ids(
 
 
 @with_retries(retries=5, sleep_time=2)
-@sly.timeit
+@timeit
 async def upsert(
     collection_name: str,
     vectors: List[np.ndarray],
@@ -166,7 +166,7 @@ async def get_diff(
     return diff
 
 
-@sly.timeit
+@timeit
 def _diff(
     image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]
 ) -> List[ImageInfoLite]:
@@ -197,7 +197,7 @@ def _diff(
     return diff
 
 
-@sly.timeit
+@timeit
 def get_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
     """Get payloads from ImageInfoLite objects.
     Converts named tuples to dictionaries and removes the id field.
@@ -216,7 +216,7 @@ def get_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
 
 
 @with_retries()
-@sly.timeit
+@timeit
 async def search(
     collection_name: str,
     query_vector: np.ndarray,
@@ -254,7 +254,7 @@ async def search(
 
 
 @with_retries()
-@sly.timeit
+@timeit
 async def get_items(
     collection_name: str, limit: int = None
 ) -> Tuple[List[ImageInfoLite], List[np.ndarray]]:
@@ -281,7 +281,7 @@ async def get_items(
     ]
 
 
-@sly.timeit
+@timeit
 async def diverse(
     collection_name: str,
     num_images: int,
@@ -308,7 +308,7 @@ async def diverse(
         raise ValueError(f"Method {method} is not supported.")
 
 
-@sly.timeit
+@timeit
 async def diverse_kmeans(
     collection_name: str,
     num_images: int,
@@ -381,7 +381,7 @@ async def diverse_kmeans(
     return diverse_images
 
 
-@sly.timeit
+@timeit
 async def get_single_point(
     collection_name: str,
     vector: np.ndarray,
