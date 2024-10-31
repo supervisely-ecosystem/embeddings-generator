@@ -11,7 +11,7 @@ from src.utils import ImageInfoLite, get_datasets, get_image_infos, timeit
 app = sly.Application()
 
 # This will enable Advanced Debugging mode only in development mode.
-# Do not need to remove it in production, since it will be ignored.
+# Do not need to remove it in production.
 sly.app.development.enable_advanced_debug()
 
 
