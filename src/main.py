@@ -18,6 +18,13 @@ sly.app.development.enable_advanced_debug()
 @app.event(Event.Embeddings, use_state=True)
 @timeit
 async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
+    # Examples of requests:
+    # 1. Calculate embeddings for all images in the project.
+    # data = {"project_id": <your-project-id>, "team_id": <your-team-id>}
+    # 2. Calculate embeddings for specific images.
+    # data = {"image_ids": [<image-id-1>, <image-id-2>, ...], "team_id": <your-team-id>}
+    # api.task.send_request(task_id, "embeddings", data, skip_response=True)
+
     sly.logger.info(
         f"Started creating embeddings for project {event.project_id}. "
         f"Force: {event.force}, Image IDs: {event.image_ids}."
