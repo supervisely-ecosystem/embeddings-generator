@@ -56,16 +56,31 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 @timeit
 async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     sly.logger.info(
-        f"Searching for similar images in project {event.project_id}. "
-        f"Query: {event.query}, Limit: {event.limit}."
+        f"Searching for similar images in project {event.project_id}, limit: {event.limit}. "
+        f"Text prompt: {event.prompt}, Image IDs: {event.image_ids}."
     )
 
-    # ? Add support for image IDs in the query.
-    # * In this case, we'll need to get the resized image URLs from the API
-    # * and then get vectors from these URLs.
+    # If request contains text prompt, prepare a list for query.
+    text_prompts = [event.prompt] if event.prompt else []
+
+    # If request contains image IDs, get image URLs to add to the query.
+    image_infos = []
+    if event.image_ids:
+        image_infos = get_image_infos(
+            api, g.IMAGE_SIZE_FOR_CAS, image_ids=event.image_ids
+        )
+        sly.logger.debug(
+            f"Request contains image IDs, obtained {len(image_infos)} image infos. "
+            "Will use their URLs for the query."
+        )
+    image_urls = [image_info.cas_url for image_info in image_infos]
+
+    # Combine text prompts and image URLs to create a query.
+    query = text_prompts + image_urls
+    sly.logger.info(f"Final query: {query}")
 
     # Vectorize the query data (can be a text prompt or an image URL).
-    query_vectors = await cas.get_vectors([event.query])
+    query_vectors = await cas.get_vectors([query])
 
     image_infos = await qdrant.search(event.project_id, query_vectors[0], event.limit)
     sly.logger.debug(f"Found {len(image_infos)} similar images.")

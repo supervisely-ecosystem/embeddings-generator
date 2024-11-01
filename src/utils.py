@@ -43,7 +43,7 @@ class EventFields:
     TEAM_ID = "team_id"
     IMAGE_IDS = "image_ids"
     FORCE = "force"
-    QUERY = "query"
+    PROMPT = "prompt"
     LIMIT = "limit"
     METHOD = "method"
 

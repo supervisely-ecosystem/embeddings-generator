@@ -25,16 +25,25 @@ class Event:
     class Search:
         endpoint = "/search"
 
-        def __init__(self, project_id: int, query: str, limit: int):
+        def __init__(
+            self,
+            project_id: int,
+            limit: Optional[int] = None,
+            prompt: Optional[str] = None,
+            image_ids: Optional[List[int]] = None,
+        ):
             self.project_id = project_id
-            self.query = query
+            self.limit = limit
+            self.prompt = prompt
+            self.image_ids = image_ids
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
             return cls(
                 data.get(EventFields.PROJECT_ID),
-                data.get(EventFields.QUERY),
                 data.get(EventFields.LIMIT),
+                data.get(EventFields.PROMPT),
+                data.get(EventFields.IMAGE_IDS),
             )
 
     class Diverse:
