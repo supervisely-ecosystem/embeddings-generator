@@ -23,4 +23,4 @@ jobs:
         context: .
         file: docker/Dockerfile
         push: true
-        tags: supervisely/embeddings-generator:0.1.0
+        tags: supervisely/embeddings-generator:0.1.1
