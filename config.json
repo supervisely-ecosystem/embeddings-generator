@@ -1,13 +1,13 @@
 {
   "type": "app",
   "version": "2.0.0",
-  "name": "Embeddings",
+  "name": "Embeddings Generator",
   "modal_template": "src/modal.html",
   "modal_template_state": {
     "qdrantHost": "",
     "casHost": ""
   },
-  "description": "---",
+  "description": "Microservice for generating embeddings using Clip as Service and saving them to Qdrant",
   "categories": ["system"],
   "icon": "",
   "icon_cover": true,
@@ -15,7 +15,7 @@
   "headless": true,
   "entrypoint": "python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --log-level warning",
   "port": 8000,
-  "docker_image": "supervisely/embeddings:0.1.0",
+  "docker_image": "supervisely/embeddings-generator:0.1.0",
   "context_menu": {
     "target": [
       "files_file",
