@@ -55,6 +55,14 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 @app.event(Event.Search, use_state=True)
 @timeit
 async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
+    # Examples of requests:
+    # 1. Search for similar images using text prompt.
+    # data = {"project_id": <your-project-id>, "limit": <limit>, "prompt": <text-prompt>}
+    # 2. Search for similar images using image IDs.
+    # data = {"project_id": <your-project-id>, "limit": <limit>, "image_ids": [<image-id-1>, <image-id-2>, ...]}
+    # 3. Both text prompt and image IDs can be provided at the same time.
+    # api.task.send_request(task_id, "search", data) # Do not skip response.
+
     sly.logger.info(
         f"Searching for similar images in project {event.project_id}, limit: {event.limit}. "
         f"Text prompt: {event.prompt}, Image IDs: {event.image_ids}."
