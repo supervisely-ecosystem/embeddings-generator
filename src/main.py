@@ -61,20 +61,27 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     # 2. Search for similar images using image IDs.
     # data = {"project_id": <your-project-id>, "limit": <limit>, "image_ids": [<image-id-1>, <image-id-2>, ...]}
     # 3. Both text prompt and image IDs can be provided at the same time.
-    # api.task.send_request(task_id, "search", data) # Do not skip response.
+    # response =api.task.send_request(task_id, "search", data) # Do not skip response.
 
     sly.logger.info(
         f"Searching for similar images in project {event.project_id}, limit: {event.limit}. "
         f"Text prompt: {event.prompt}, Image IDs: {event.image_ids}."
     )
 
-    # If request contains text prompt, prepare a list for query.
-    text_prompts = [event.prompt] if event.prompt else []
+    text_prompts = []
+    if event.prompt:
+        if isinstance(event.prompt, list):
+            text_prompts = event.prompt
+        else:
+            # If prompt is a comma-separated string, split it into a list.
+            text_prompts = event.prompt.split(",")
+
+    sly.logger.debug(f"Formatted text prompts: {text_prompts}")
 
     # If request contains image IDs, get image URLs to add to the query.
     image_infos = []
     if event.image_ids:
-        image_infos = get_image_infos(
+        image_infos = await get_image_infos(
             api, g.IMAGE_SIZE_FOR_CAS, image_ids=event.image_ids
         )
         sly.logger.debug(
@@ -88,7 +95,10 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     sly.logger.info(f"Final query: {query}")
 
     # Vectorize the query data (can be a text prompt or an image URL).
-    query_vectors = await cas.get_vectors([query])
+    query_vectors = await cas.get_vectors(query)
+    sly.logger.debug(
+        f"The query has been vectorized and will be used for search. Number of vectors: {len(query_vectors)}."
+    )
 
     image_infos = await qdrant.search(event.project_id, query_vectors[0], event.limit)
     sly.logger.debug(f"Found {len(image_infos)} similar images.")
@@ -99,16 +109,19 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
 @app.event(Event.Diverse, use_state=True)
 @timeit
 async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
+    # Examples of requests:
+    # 1. Generate diverse population using KMeans method.
+    # data = {"project_id": <your-project-id>, "limit": <limit>, "method": "kmeans"}
+    # response = api.task.send_request(task_id, "diverse", data) # Do not skip response.
     sly.logger.info(
         f"Generating diverse population for project {event.project_id}. "
-        f"Method: {event.query}, Limit: {event.limit}, Option: {event.option}."
+        f"Method: {event.method}, Limit: {event.limit}."
     )
 
     image_infos = await qdrant.diverse(
         event.project_id,
         event.limit,
         event.method,
-        event.option,
     )
     sly.logger.debug(f"Generated {len(image_infos)} diverse images.")
 

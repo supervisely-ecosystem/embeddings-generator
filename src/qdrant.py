@@ -286,7 +286,6 @@ async def diverse(
     collection_name: str,
     num_images: int,
     method: str,
-    option: str,
 ) -> List[ImageInfoLite]:
     """Generate a diverse population of images using the specified method.
 
@@ -296,14 +295,12 @@ async def diverse(
     :type num_images: int
     :param method: The method to use for generating diverse images.
     :type method: str
-    :param option: Option is an additional parameter for the method.
-    :type option: str
     :raises ValueError: If the method is not supported.
     :return: A list of diverse images as ImageInfoLite objects.
     :rtype: List[ImageInfoLite]
     """
     if method == QdrantFields.KMEANS:
-        return await diverse_kmeans(collection_name, num_images, option)
+        return await diverse_kmeans(collection_name, num_images)
     else:
         raise ValueError(f"Method {method} is not supported.")
 
