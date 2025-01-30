@@ -61,3 +61,27 @@ class Event:
                 data.get(EventFields.METHOD),
                 data.get(EventFields.LIMIT),
             )
+
+    class Projections:
+        endpoint = "/projections"
+
+        def __init__(self, project_id: int):
+            self.project_id = project_id
+
+        @classmethod
+        def from_json(cls, data: Dict[str, Any]):
+            return cls(
+                data.get(EventFields.PROJECT_ID),
+            )
+
+    class UpdateEmbeddings:
+        endpoint = "/update_embeddings"
+
+        def __init__(self, project_id: int):
+            self.project_id = project_id
+
+        @classmethod
+        def from_json(cls, data: Dict[str, Any]):
+            return cls(
+                data.get(EventFields.PROJECT_ID),
+            )

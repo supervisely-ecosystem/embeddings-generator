@@ -1,11 +1,13 @@
 import asyncio
+import datetime
 from collections import namedtuple
 from functools import partial, wraps
 from time import perf_counter
-from typing import Callable, List
+from typing import Callable, Dict, List, Optional
 
 import supervisely as sly
 from supervisely._utils import resize_image_url
+from supervisely.api.module_api import ApiField
 
 
 class TupleFields:
@@ -40,6 +42,7 @@ class EventFields:
     """Fields of the event in request objects."""
 
     PROJECT_ID = "project_id"
+    DATASET_ID = "dataset_id"
     TEAM_ID = "team_id"
     IMAGE_IDS = "image_ids"
     FORCE = "force"
@@ -51,8 +54,8 @@ class EventFields:
     POINTCLOUD = "pointcloud"
 
 
-ImageInfoLite = namedtuple(
-    "ImageInfoLite",
+_ImageInfoLite = namedtuple(
+    "_ImageInfoLite",
     [
         TupleFields.ID,
         TupleFields.DATASET_ID,
@@ -61,6 +64,27 @@ ImageInfoLite = namedtuple(
         TupleFields.UPDATED_AT,
     ],
 )
+
+
+class ImageInfoLite(_ImageInfoLite):
+    def to_json(self):
+        return {
+            TupleFields.ID: self.id,
+            TupleFields.DATASET_ID: self.dataset_id,
+            TupleFields.FULL_URL: self.full_url,
+            TupleFields.CAS_URL: self.cas_url,
+            TupleFields.UPDATED_AT: self.updated_at,
+        }
+    
+    @classmethod
+    def from_json(cls, data):
+        return cls(
+            id=data[TupleFields.ID],
+            dataset_id=data[TupleFields.DATASET_ID],
+            full_url=data[TupleFields.FULL_URL],
+            cas_url=data[TupleFields.CAS_URL],
+            updated_at=data[TupleFields.UPDATED_AT],
+        )
 
 
 def timeit(func: Callable) -> Callable:
@@ -237,3 +261,45 @@ def get_image_infos(
         )
         for image_info in image_infos
     ]
+
+
+def parse_timestamp(
+    timestamp: str, timestamp_format: str = "%Y-%m-%dT%H:%M:%S.%fZ"
+) -> datetime.datetime:
+    """
+    Parse timestamp string to datetime object.
+    Timestamp format: "2021-01-22T19:37:50.158Z".
+    """
+    return datetime.datetime.strptime(timestamp, timestamp_format)
+
+
+async def send_request(
+    api: sly.Api,
+    task_id: int,
+    method: str,
+    data: Dict,
+    context: Optional[Dict] = {},
+    skip_response: bool = False,
+    timeout: Optional[int] = 60,
+    outside_request: bool = True,
+    retries: int = 10,
+    raise_error: bool = False,
+):
+    """send_request"""
+    if type(data) is not dict:
+        raise TypeError("data argument has to be a dict")
+    context["outside_request"] = outside_request
+    resp = await api.post_async(
+        "tasks.request.direct",
+        {
+            ApiField.TASK_ID: task_id,
+            ApiField.COMMAND: method,
+            ApiField.CONTEXT: context,
+            ApiField.STATE: data,
+            "skipResponse": skip_response,
+            "timeout": timeout,
+        },
+        retries=retries,
+        raise_error=raise_error,
+    )
+    return resp.json()

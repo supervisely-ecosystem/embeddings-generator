@@ -1,14 +1,21 @@
+import base64
 from typing import List
 
 import supervisely as sly
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from supervisely.api.module_api import ApiField
 
 import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.events import Event
-from src.utils import ImageInfoLite, get_datasets, get_image_infos, timeit
+from src.utils import (ImageInfoLite, get_datasets, get_image_infos,
+                       parse_timestamp, timeit)
+from src.visualization import (create_projections, get_projections,
+                               projections_up_to_date, save_projections)
 
 app = sly.Application()
+server = app.get_server()
 
 # This will enable Advanced Debugging mode only in development mode.
 # Do not need to remove it in production.
@@ -147,6 +154,10 @@ async def process_images(
     :param image_ids: List of image IDs to process.
     :type image_ids: List[int], optional
     """
+    if dataset_id is None and image_ids is None:
+        datasets = api.dataset.get_list(project_id)
+        image_ids = [info.id for dataset in datasets for info in api.image.get_list(dataset_id=dataset.id)]
+
     # Get image infos from the project.
     image_infos = await get_image_infos(
         api,
@@ -155,11 +166,23 @@ async def process_images(
         image_ids=image_ids,
     )
 
-    # Get diff of image infos, check if they are already
-    # in the Qdrant collection and have the same updated_at field.
-    qdrant_diff = await qdrant.get_diff(project_id, image_infos)
+    if qdrant.collection_exists(project_id):
+        # Get diff of image infos, check if they are already
+        # in the Qdrant collection and have the same updated_at field.
+        image_infos = await qdrant.get_diff(project_id, image_infos)
 
-    await image_infos_to_db(project_id, qdrant_diff)
+    await image_infos_to_db(project_id, image_infos)
+
+
+async def base64_from_url(url):
+    g.api._set_async_client()
+    r = await g.api.async_httpx_client.get(url)
+    b = bytes()
+    async for chunk in r.aiter_bytes():
+        b += chunk
+    img_base64 = base64.b64encode(b)
+    data_url = "data:image/png;base64,{}".format(str(img_base64, "utf-8"))
+    return data_url
 
 
 @timeit
@@ -172,8 +195,9 @@ async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -
     sly.logger.debug(f"Upserting {len(image_infos)} vectors to Qdrant.")
     for image_batch in sly.batched(image_infos):
         # Get vectors from images.
+        base64_data = [await base64_from_url(image_info.cas_url) for image_info in image_batch]
         vectors_batch = await cas.get_vectors(
-            [image_info.cas_url for image_info in image_batch]
+            base64_data
         )
 
         sly.logger.debug(f"Received {len(vectors_batch)} vectors.")
@@ -185,3 +209,66 @@ async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -
             image_batch,
         )
     sly.logger.debug(f"Upserted {len(image_infos)} vectors to Qdrant.")
+
+
+@app.event(Event.Projections, use_state=True)
+@timeit
+async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
+    if projections_up_to_date(api, event.project_id):
+        image_infos, projections = await get_projections(api, event.project_id)
+    image_infos, projections = await create_projections(api, event.project_id)
+    await save_projections(api, event.project_id, image_infos, projections)
+    return [[info.to_json() for info in image_infos], projections]
+
+
+@timeit
+async def _update_embeddings(api: sly.Api, project_id: int):
+    project_info = api.project.get_info_by_id(project_id)
+    custom_data = project_info.custom_data
+    if custom_data is None:
+        custom_data = {}
+    if custom_data.get("embeddings", False):
+        return
+    emb_updated_at = custom_data.get("embeddings_updated_at", None)
+    if emb_updated_at is None:
+        await process_images(api, project_id)
+    elif parse_timestamp(emb_updated_at) < project_info.updated_at:
+        datasets = api.dataset.get_list(project_id)
+        datasets = [dataset for dataset in datasets if parse_timestamp(dataset.updated_at) > parse_timestamp(emb_updated_at)]
+        image_ids = [info.id for dataset in datasets for info in api.image.get_list(dataset_id=dataset.id)]
+        await process_images(api, project_id, image_ids)
+    custom_data["embeddings_updated_at"] = project_info.updated_at
+    api.project.update_custom_data(project_id)
+
+
+@app.event(Event.UpdateEmbeddings, use_state=True)
+async def update_embeddings_event_endpoint(api: sly.Api, event: Event.UpdateEmbeddings):
+    return await _update_embeddings(api, event.project_id)
+
+
+async def update_all_embeddings():
+    projects = g.api.project.get_list_all()["entities"]
+    for project in projects:
+        if project.custom_data is None:
+            continue
+        if project.custom_data.get("embeddings", False):
+            await _update_embeddings(g.api, project.id)
+
+
+async def run_safe(func, *args, **kwargs):
+    try:
+        return await func(*args, **kwargs)
+    except Exception as e:
+        sly.logger.error(f"Error in function {func.__name__}: {e}")
+        return None
+
+
+scheduler = AsyncIOScheduler()
+scheduler.add_job(run_safe, args=[update_all_embeddings], trigger="interval", minutes=g.UPDATE_EMBEDDINGS_INTERVAL)
+
+
+@server.on_event("startup")
+def on_startup():
+    scheduler.start()
+
+app.call_before_shutdown(scheduler.shutdown)

@@ -11,7 +11,8 @@ from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
 from sklearn.cluster import KMeans
 
 import src.globals as g
-from src.utils import ImageInfoLite, QdrantFields, TupleFields, timeit, with_retries
+from src.utils import (ImageInfoLite, QdrantFields, TupleFields, timeit,
+                       with_retries)
 
 client = AsyncQdrantClient(g.qdrant_host)
 
@@ -65,6 +66,21 @@ async def get_or_create_collection(
         sly.logger.debug(f"Collection {collection_name} created.")
         collection = await client.get_collection(collection_name)
     return collection
+
+
+async def collection_exists(collection_name: str) -> bool:
+    """Check if a collection with the specified name exists.
+
+    :param collection_name: The name of the collection to check.
+    :type collection_name: str
+    :return: True if the collection exists, False otherwise.
+    :rtype: bool
+    """
+    try:
+        await client.get_collection(collection_name)
+        return True
+    except UnexpectedResponse:
+        return False
 
 
 @with_retries()

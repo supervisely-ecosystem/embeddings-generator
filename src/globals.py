@@ -20,6 +20,11 @@ sly.logger.debug(f"Team ID: {team_id}, Workspace ID: {workspace_id}")
 # comes from the .env file.
 qdrant_host = os.getenv("modal.state.qdrantHost") or os.getenv("QDRANT_HOST")
 cas_host = os.getenv("modal.state.casHost") or os.getenv("CAS_HOST")
+try:
+    cas_host = int(cas_host)
+except ValueError:
+    if cas_host[:4] not in ["http", "ws:/", "grpc"]:
+        cas_host = "grpc://" + cas_host
 # endregion
 
 if not qdrant_host:
@@ -32,6 +37,7 @@ sly.logger.info(f"CAS host: {cas_host}")
 
 # region constants
 IMAGE_SIZE_FOR_CAS = 224
+UPDATE_EMBEDDINGS_INTERVAL = 10 # minutes
 # endregion
 
 sly.logger.debug(f"Image size for CAS: {IMAGE_SIZE_FOR_CAS}")
