@@ -110,7 +110,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     image_infos = await qdrant.search(event.project_id, query_vectors[0], event.limit)
     sly.logger.debug(f"Found {len(image_infos)} similar images.")
 
-    return image_infos
+    return [image.to_json() for image in image_infos]
 
 
 @app.event(Event.Diverse, use_state=True)
@@ -223,10 +223,20 @@ async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -
 @timeit
 async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
     if projections_up_to_date(api, event.project_id):
+        sly.logger.debug("Projections are up to date. Loading from file.")
         image_infos, projections = await get_projections(api, event.project_id)
-    image_infos, projections = await create_projections(api, event.project_id)
-    await save_projections(api, event.project_id, image_infos, projections)
-    return [[info.to_json() for info in image_infos], projections]
+    else:
+        sly.logger.debug("Projections are not up to date. Creating new projections.")
+        image_infos, projections = await create_projections(api, event.project_id)
+        await save_projections(api, event.project_id, image_infos, projections)
+    sly.logger.debug(f"Loaded {len(projections)} projections.")
+    sly.logger.debug(f"Filtering projections by image IDs. image_ids: {event.image_ids}")
+    indexes = []
+    for i, info in enumerate(image_infos):
+        if event.image_ids is None or info.id in event.image_ids: 
+            indexes.append(i)
+    sly.logger.debug(f"Returning {len(indexes)} projections.")
+    return [[image_infos[i].to_json() for i in indexes], [projections[i] for i in indexes]]
 
 
 @timeit

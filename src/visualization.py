@@ -8,13 +8,14 @@ import supervisely as sly
 import umap
 
 import src.qdrant as qdrant
-from src.utils import ImageInfoLite, parse_timestamp
+from src.utils import ImageInfoLite, parse_timestamp, timeit
 
 
 def projections_path(project_id):
     return f"/embeddings/visualizations/{project_id}/projections.json"
 
 
+@timeit
 def calculate_projections(
     embeddings, all_info_list, projection_method, metric="euclidean", umap_min_dist=0.05
 ) -> List[List[float]]:
@@ -47,7 +48,7 @@ def calculate_projections(
         )
     return projections.tolist()
 
-
+@timeit
 async def create_projections(
     api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
@@ -67,6 +68,7 @@ async def create_projections(
     return image_infos, projections
 
 
+@timeit
 async def save_projections(
     api: sly.Api,
     project_id: int,
@@ -83,12 +85,14 @@ async def save_projections(
     api.file.upload(project_info.team_id, "tmp.json", projections_path(project_id))
     Path("tmp.json").unlink()
 
+@timeit
 async def get_projections(api: sly.Api, project_id: int) -> Tuple[List[ImageInfoLite], List[List[float]]]:
     project_info = api.project.get_info_by_id(project_id)
     file_info = api.file.get_info_by_path(
         project_info.team_id, projections_path(project_id)
     )
     if file_info is None:
+        sly.logger.debug("file not found")
         return [], []
     with tempfile.NamedTemporaryFile("r") as f:
         api.file.download(project_info.team_id, projections_path(project_id), f.name)

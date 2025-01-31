@@ -65,13 +65,15 @@ class Event:
     class Projections:
         endpoint = "/projections"
 
-        def __init__(self, project_id: int):
+        def __init__(self, project_id: int, image_ids: Optional[List[int]] = None):
             self.project_id = project_id
+            self.image_ids = image_ids
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
             return cls(
                 data.get(EventFields.PROJECT_ID),
+                data.get(EventFields.IMAGE_IDS),
             )
 
     class UpdateEmbeddings:
