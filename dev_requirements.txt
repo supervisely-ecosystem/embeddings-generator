@@ -2,6 +2,4 @@ supervisely==6.73.267
 clip-client==0.8.3
 qdrant-client==1.12.1
 pympler==1.0.1
-scikit-learn
-umap-learn==0.5.4
 apscheduler==3.11.0

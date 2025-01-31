@@ -3,10 +3,9 @@ import tempfile
 from pathlib import Path
 from typing import List, Tuple
 
-import sklearn.decomposition
 import supervisely as sly
-import umap
 
+import src.globals as g
 import src.qdrant as qdrant
 from src.utils import ImageInfoLite, parse_timestamp, timeit
 
@@ -14,39 +13,6 @@ from src.utils import ImageInfoLite, parse_timestamp, timeit
 def projections_path(project_id):
     return f"/embeddings/visualizations/{project_id}/projections.json"
 
-
-@timeit
-def calculate_projections(
-    embeddings, all_info_list, projection_method, metric="euclidean", umap_min_dist=0.05
-) -> List[List[float]]:
-    try:
-        if projection_method == "PCA":
-            decomp = sklearn.decomposition.PCA(2)
-            projections = decomp.fit_transform(embeddings)
-        elif projection_method == "UMAP":
-            decomp = umap.UMAP(min_dist=umap_min_dist, metric=metric)
-            projections = decomp.fit_transform(embeddings)
-        elif projection_method == "PCA-UMAP":
-            decomp = sklearn.decomposition.PCA(64)
-            projections = decomp.fit_transform(embeddings)
-            decomp = umap.UMAP(min_dist=umap_min_dist, metric=metric)
-            projections = decomp.fit_transform(projections)
-        # elif projection_method == "t-SNE":
-        #     decomp = sklearn.manifold.TSNE(2, perplexity=min(30, len(all_info_list) - 1), metric=metric, n_jobs=-1)
-        #     projections = decomp.fit_transform(embeddings)
-        # elif projection_method == "PCA-t-SNE":
-        #     decomp = sklearn.decomposition.PCA(64)
-        #     projections = decomp.fit_transform(embeddings)
-        #     decomp = sklearn.manifold.TSNE(2, perplexity=min(30, len(all_info_list) - 1), metric=metric, n_jobs=-1)
-        #     projections = decomp.fit_transform(projections)
-        else:
-            raise ValueError(f"unexpexted projection_method {projection_method}")
-    except Exception as e:
-        print(e)
-        raise RuntimeError(
-            f"count of embeddings = {len(embeddings)}, not enough to calculate projections."
-        )
-    return projections.tolist()
 
 @timeit
 async def create_projections(
@@ -64,7 +30,7 @@ async def create_projections(
     image_infos, vectors = await qdrant.get_items_by_ids(
         project_id, image_ids, with_vectors=True
     )
-    projections = calculate_projections(vectors, image_infos, "UMAP")
+    projections = g.api.task.send_request(g.projections_service_task_id, "create_projections", data={"vectors": vectors, "method": "UMAP"})
     return image_infos, projections
 
 

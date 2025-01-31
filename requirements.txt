@@ -1,3 +1,2 @@
 apscheduler==3.11.0
-umap-learn==0.5.4
 supervisely==6.73.267
