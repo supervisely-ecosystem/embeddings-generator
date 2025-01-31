@@ -185,6 +185,14 @@ async def base64_from_url(url):
     return data_url
 
 
+def fix_vectors_batch(vectors_batch):
+    for i, vector in enumerate(vectors_batch):
+        for j, value in enumerate(vector):
+            if not isinstance(value, float):
+                sly.logger.debug(f"Value {value} is not float - {type(value)}, converting to float.")
+                vectors_batch[i][j] = float(value)
+    return vectors_batch
+
 @timeit
 async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -> None:
     """Save image infos to the database.
@@ -199,6 +207,7 @@ async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -
         vectors_batch = await cas.get_vectors(
             base64_data
         )
+        vectors_batch = fix_vectors_batch(vectors_batch)
         sly.logger.debug(f"Received {len(vectors_batch)} vectors: {vectors_batch[0]}")
         sly.logger.debug(f"Received {len(image_batch)} images: {image_batch[0]}")
         # Upsert vectors to Qdrant.
