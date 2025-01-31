@@ -180,8 +180,9 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
     project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
     for i, info in enumerate(infos, 1):
         ann_info = api.annotation.download(info["id"])
-        gallery.append(info["full_url"], ann_info, project_meta)
+        gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
         print(f"image {i}/{len(infos)} added to gallery")
+    gallery._update()
 
     bokeh._load_chart()
     bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")

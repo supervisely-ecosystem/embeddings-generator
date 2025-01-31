@@ -78,5 +78,6 @@ def _init_client() -> CasClient:
 client = _init_client()
 
 
+@timeit
 async def get_vectors(queries: List[str]) -> List[List[float]]:
     return await client.get_vectors(queries)
