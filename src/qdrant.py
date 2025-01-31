@@ -125,12 +125,15 @@ async def upsert(
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     """
+    payloads = get_payloads(image_infos)
+    sly.logger.debug(f"Upserting {len(vectors)} vectors to collection {collection_name}. {vectors[0]}")
+    sly.logger.debug(f"Upserting {len(payloads)} payloads to collection {collection_name}. {payloads[0]}")
     await client.upsert(
         collection_name,
         Batch(
             vectors=vectors,
             ids=[image_info.id for image_info in image_infos],
-            payloads=get_payloads(image_infos),
+            payloads=payloads,
         ),
     )
 

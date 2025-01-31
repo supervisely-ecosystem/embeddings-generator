@@ -199,9 +199,8 @@ async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -
         vectors_batch = await cas.get_vectors(
             base64_data
         )
-
-        sly.logger.debug(f"Received {len(vectors_batch)} vectors.")
-
+        sly.logger.debug(f"Received {len(vectors_batch)} vectors: {vectors_batch[0]}")
+        sly.logger.debug(f"Received {len(image_batch)} images: {image_batch[0]}")
         # Upsert vectors to Qdrant.
         await qdrant.upsert(
             project_id,
