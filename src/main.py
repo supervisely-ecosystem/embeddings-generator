@@ -6,8 +6,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
-from functions import auto_update_all_embeddings, process_images
 from src.events import Event
+from src.functions import auto_update_all_embeddings, process_images
 from src.utils import (
     ImageInfoLite,
     get_image_infos,
