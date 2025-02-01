@@ -16,6 +16,7 @@ from src.utils import (
     get_image_infos,
     get_project_info,
     run_safe,
+    send_request,
     timeit,
     update_custom_data,
 )
@@ -72,6 +73,15 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         await update_custom_data(api, event.project_id, custom_data)
 
     sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
+    if event.image_ids:
+        image_infos, vectors = await qdrant.get_items_by_ids(
+            event.project_id, event.image_ids, with_vectors=True
+        )
+    else:
+        image_infos, vectors = await qdrant.get_items(event.project_id)
+    sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
+
+    return [info.to_json for info in image_infos], vectors
 
 
 @app.event(Event.Search, use_state=True)
@@ -170,7 +180,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     )
     sly.logger.debug("Generated %d diverse images.", len(image_infos))
 
-    return image_infos
+    return [info.to_json for info in image_infos]
 
 
 @app.event(Event.Projections, use_state=True)
@@ -194,6 +204,26 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
             indexes.append(i)
     sly.logger.debug("Returning %d projections.", len(indexes))
     return [[image_infos[i].to_json() for i in indexes], [projections[i] for i in indexes]]
+
+
+@app.event(Event.Clusters, use_state=True)
+async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
+    if event.image_ids:
+        image_infos, vectors = await qdrant.get_items_by_ids(
+            event.project_id, event.image_ids, with_vectors=True
+        )
+    else:
+        image_infos, vectors = await qdrant.get_items(event.project_id)
+    labels = await send_request(
+        api,
+        g.projections_service_task_id,
+        "clusters",
+        data={"vectors": vectors, "reduce": True},
+        timeout=60 * 5,
+        retries=3,
+        raise_error=True,
+    )
+    return [info.to_json() for info in image_infos], labels
 
 
 @server.post("/embeddings_up_to_date")

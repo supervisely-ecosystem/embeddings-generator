@@ -172,13 +172,16 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
 
     print("Init bokeh widget")
 
-    plot: Bokeh.Circle = bokeh._plots[0]
     this_ids = set([info["id"] for info in image_infos])
-    plot._x_coordinates = [item[1][1] for item in current_items if item[0]["id"] not in this_ids]
-    plot._y_coordinates = [item[1][0] for item in current_items if item[0]["id"] not in this_ids]
-    plot._radii = [0.05 for item in current_items if item[0]["id"] not in this_ids]
-    plot._colors = ["#222222" for item in current_items if item[0]["id"] not in this_ids]
-
+    bokeh.clear()
+    plot = Bokeh.Circle(
+        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
+        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
+        colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
+        legend_label="Images",
+        plot_id=1,
+        radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
+    )
     new_plot = Bokeh.Circle(
         x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
         y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
@@ -186,10 +189,7 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
         legend_label=prompt,
         radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
     )
-    if len(bokeh._plots) > 1:
-        bokeh._plots[1] = new_plot
-    else:
-        bokeh.add_plots([new_plot])
+    bokeh.add_plots([plot, new_plot])
     bokeh._load_chart()
     bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
     bokeh_iframe.loading = False
@@ -202,6 +202,63 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
         ann_info = api.annotation.download(info["id"])
         gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
         print(f"image {i}/{len(image_infos)} added to gallery")
+    gallery._update()
+    gallery.loading = False
+
+
+def draw_clusters(project_id):
+    gallery.loading = True
+    bokeh_iframe.loading = True
+    print("=====================================")
+    print("Embeddings Generator Task ID and Project ID")
+    print("task_id:", embeddings_generator_task_id)
+    print("project_id:", project_id)
+    print("=====================================")
+    print("Sending request to update_embeddings...")
+
+    try:
+        r = api.task.send_request(
+            embeddings_generator_task_id,
+            "embeddings",
+            data={"project_id": project_id, "force": False},
+        )
+    except:
+        pass
+
+    print("=====================================")
+    print("Sending request to clusters...")
+    r = api.task.send_request(
+        embeddings_generator_task_id,
+        "clusters",
+        data={"project_id": project_id},
+    )
+    image_infos, labels = r
+    print(f"Got {len(image_infos)} images")
+    print("=====================================")
+
+    print("Init bokeh widget")
+
+    unique_labels = set(labels)
+    plots = []
+    colors = ["#222222", *sly.color.get_predefined_colors(len(unique_labels) - 1)]
+    for label, color in zip(sorted(unique_labels), colors):
+        this_ids = [info["id"] for info, l in zip(image_infos, labels) if l == label]
+        plot = Bokeh.Circle(
+            x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
+            y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
+            colors=[color for item in current_items if item[0]["id"] not in this_ids],
+            legend_label="Outliers" if label == -1 else "Cluster #" + str(label + 1),
+            plot_id=label,
+            radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
+        )
+        plots.append(plot)
+
+    gallery.clean_up()
+    bokeh.clear()
+    bokeh.add_plots(plots)
+    bokeh._load_chart()
+    bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
+    bokeh_iframe.loading = False
     gallery._update()
     gallery.loading = False
 
