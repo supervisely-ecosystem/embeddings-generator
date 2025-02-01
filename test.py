@@ -92,6 +92,7 @@ gallery = GridGalleryV2(5)
 search_button = Button("Search")
 load_project = Button("Load project")
 tabs = RadioTabs(titles=["Plot", "Gallery"], contents=[bokeh_iframe, gallery])
+clusters_button = Button("Clusters")
 
 
 def draw_all_projections(project_id):
@@ -277,5 +278,13 @@ def search_click():
     draw_projections_per_prompt(project_id, prompt)
 
 
-layout = Container(widgets=[select_project, load_project, input_search, search_button, tabs])
+@clusters_button.click
+def clusters_click():
+    project_id = select_project.get_selected_id()
+    draw_clusters(project_id)
+
+
+layout = Container(
+    widgets=[select_project, load_project, input_search, search_button, clusters_button, tabs]
+)
 app = sly.Application(layout=layout)

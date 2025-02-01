@@ -37,7 +37,7 @@ async def create_projections(
     projections = await send_request(
         api,
         g.projections_service_task_id,
-        "create_projections",
+        "projections",
         data={"vectors": vectors, "method": "UMAP"},
         timeout=60 * 5,
         retries=3,
@@ -97,6 +97,9 @@ async def projections_up_to_date(
 
     if file_info is None:
         file_info = await get_file_info(api, project_info.team_id, projections_path(project_id))
+
+    sly.logger.debug("project_info: %s", project_info._asdict())
+    sly.logger.debug("file_info: %s", file_info._asdict())
     if file_info is None:
         return False
 
