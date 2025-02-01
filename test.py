@@ -3,14 +3,25 @@ from collections import defaultdict, namedtuple
 
 import dotenv
 import supervisely as sly
-from supervisely.app.widgets import (Bokeh, Button, Container, Empty, Flexbox,
-                                     GridGalleryV2, IFrame, Input, OneOf,
-                                     RadioTabs, Select, SelectDataset,
-                                     SelectItem, SelectProject)
+from supervisely.app.widgets import (
+    Bokeh,
+    Button,
+    Container,
+    Empty,
+    Flexbox,
+    GridGalleryV2,
+    IFrame,
+    Input,
+    OneOf,
+    RadioTabs,
+    Select,
+    SelectDataset,
+    SelectItem,
+    SelectProject,
+)
 
 dotenv.load_dotenv(os.path.expanduser("~/supervisely.env"))
 dotenv.load_dotenv("local.env")
-
 
 
 class TupleFields:
@@ -29,6 +40,7 @@ class TupleFields:
     ATLAS_INDEX = "atlasIndex"
     VECTOR = "vector"
     IMAGES = "images"
+
 
 _ImageInfoLite = namedtuple(
     "_ImageInfoLite",
@@ -51,7 +63,7 @@ class ImageInfoLite(_ImageInfoLite):
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.UPDATED_AT: self.updated_at,
         }
-    
+
     @classmethod
     def from_json(cls, data):
         return cls(
@@ -61,6 +73,7 @@ class ImageInfoLite(_ImageInfoLite):
             cas_url=data[TupleFields.CAS_URL],
             updated_at=data[TupleFields.UPDATED_AT],
         )
+
 
 api = sly.Api()
 
@@ -73,18 +86,13 @@ current_items = []
 bokeh = Bokeh([])
 bokeh_iframe = IFrame()
 bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="100%")
-
 select_project = SelectProject(compact=False)
 input_search = Input()
-# select = Select(items=[Select.Item("all", "All", content=Empty()), Select.Item("search", "Search", content=input_search), Select.Item("image", "Image", content=Empty())])
-
 gallery = GridGalleryV2(5)
-
-# oneof = OneOf(select)
 search_button = Button("Search")
 load_project = Button("Load project")
-
 tabs = RadioTabs(titles=["Plot", "Gallery"], contents=[bokeh_iframe, gallery])
+
 
 def draw_all_projections(project_id):
     global current_items
@@ -98,14 +106,20 @@ def draw_all_projections(project_id):
     print("Sending request to update_embeddings...")
 
     try:
-        r = api.task.send_request(embeddings_generator_task_id, "embeddings", data={"project_id": project_id, "force": False})
+        r = api.task.send_request(
+            embeddings_generator_task_id,
+            "embeddings",
+            data={"project_id": project_id, "force": False},
+        )
     except:
         pass
 
     print("=====================================")
     print("Sending request to get projections...")
 
-    r = api.task.send_request(embeddings_generator_task_id, "projections", data={"project_id": project_id})
+    r = api.task.send_request(
+        embeddings_generator_task_id, "projections", data={"project_id": project_id}
+    )
     infos, projections = r
     print(f"Got {len(projections)} projections")
 
@@ -137,41 +151,40 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
     print("Sending request to update_embeddings...")
 
     try:
-        r = api.task.send_request(embeddings_generator_task_id, "embeddings", data={"project_id": project_id, "force": False})
+        r = api.task.send_request(
+            embeddings_generator_task_id,
+            "embeddings",
+            data={"project_id": project_id, "force": False},
+        )
     except:
         pass
 
-
-    print ("=====================================")
+    print("=====================================")
     print("Sending request to search...")
-    r = api.task.send_request(embeddings_generator_task_id, "search", data={"project_id": project_id, "prompt": prompt, "limit": limit})
-    image_infos = [ImageInfoLite.from_json(info) for info in r]
+    r = api.task.send_request(
+        embeddings_generator_task_id,
+        "search",
+        data={"project_id": project_id, "prompt": prompt, "limit": limit},
+    )
+    image_infos = [ImageInfoLite.from_json(info) for info in r[0]]
     print(f"Got {len(image_infos)} images")
-
     print("=====================================")
-    print("Sending request to get projections...")
 
-    r = api.task.send_request(embeddings_generator_task_id, "projections", data={"project_id": project_id, "image_ids": [info.id for info in image_infos]})
-    infos, projections = r
-    print(f"Got {len(projections)} projections")
-
-    print("=====================================")
     print("Init bokeh widget")
-    
 
     plot: Bokeh.Circle = bokeh._plots[0]
-    this_ids = set([info["id"] for info in infos])
+    this_ids = set([info["id"] for info in image_infos])
     plot._x_coordinates = [item[1][1] for item in current_items if item[0]["id"] not in this_ids]
     plot._y_coordinates = [item[1][0] for item in current_items if item[0]["id"] not in this_ids]
     plot._radii = [0.05 for item in current_items if item[0]["id"] not in this_ids]
     plot._colors = ["#222222" for item in current_items if item[0]["id"] not in this_ids]
 
     new_plot = Bokeh.Circle(
-        x_coordinates=[projection[1] for projection in projections],
-        y_coordinates=[projection[0] for projection in projections],
-        colors=["#006400"] * len(projections),
+        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
+        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
+        colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
         legend_label=prompt,
-        radii=[0.05] * len(projections),
+        radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
     )
     if len(bokeh._plots) > 1:
         bokeh._plots[1] = new_plot
@@ -185,13 +198,12 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
     print("init Gallery")
     gallery.clean_up()
     project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
-    for i, info in enumerate(infos, 1):
+    for i, info in enumerate(image_infos, 1):
         ann_info = api.annotation.download(info["id"])
         gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
-        print(f"image {i}/{len(infos)} added to gallery")
+        print(f"image {i}/{len(image_infos)} added to gallery")
     gallery._update()
     gallery.loading = False
-
 
 
 @load_project.click
@@ -202,11 +214,11 @@ def load_project_click():
 
 @search_button.click
 def search_click():
-    
+
     prompt = input_search.get_value()
     project_id = select_project.get_selected_id()
     draw_projections_per_prompt(project_id, prompt)
-    
 
-layout = Container(widgets=[select_project, load_project ,input_search, search_button, tabs])
+
+layout = Container(widgets=[select_project, load_project, input_search, search_button, tabs])
 app = sly.Application(layout=layout)
