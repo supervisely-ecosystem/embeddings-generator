@@ -90,7 +90,7 @@ async def update_embeddings(
     project_info: Optional[sly.ProjectInfo] = None,
 ):
     if project_info is None:
-        project_info = get_project_info(api, project_id)
+        project_info = await get_project_info(api, project_id)
     custom_data = project_info.custom_data or {}
     # Check if embeddings are up-to-date
     emb_updated_at = custom_data.get("embeddings_updated_at", None)
@@ -124,7 +124,7 @@ async def update_embeddings(
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
     custom_data["embeddings_updated_at"] = project_info.updated_at
-    update_custom_data(api, project_id, custom_data)
+    await update_custom_data(api, project_id, custom_data)
 
 
 @timeit
@@ -135,7 +135,7 @@ async def auto_update_embeddings(
     Update embeddings for the specified project if needed.
     """
     if project_info is None:
-        project_info = get_project_info(api, project_id)
+        project_info = await get_project_info(api, project_id)
 
     # Check if embeddings activated for the project
     custom_data = project_info.custom_data or {}
@@ -171,7 +171,7 @@ async def auto_update_embeddings(
 async def auto_update_all_embeddings():
     """Update embeddings for all available projects"""
     logger.debug("Auto update all embeddings task started.")
-    project_infos: List[sly.ProjectInfo] = get_all_projects(g.api)
+    project_infos: List[sly.ProjectInfo] = await get_all_projects(g.api)
     for project_info in project_infos:
         await auto_update_embeddings(g.api, project_info.id, project_info=project_info)
     logger.debug("Auto update all embeddings task finished.")

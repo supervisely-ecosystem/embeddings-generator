@@ -63,10 +63,10 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
     if event.image_ids is None:
         # Step 4: Update custom data.
-        project_info = get_project_info(api, event.project_id)
+        project_info = await get_project_info(api, event.project_id)
         custom_data = project_info.custom_data or {}
         custom_data["embeddings_updated_at"] = project_info.updated_at
-        update_custom_data(api, event.project_id, custom_data)
+        await update_custom_data(api, event.project_id, custom_data)
 
     sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
 
@@ -157,8 +157,8 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 @app.event(Event.Projections, use_state=True)
 @timeit
 async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
-    project_info = get_project_info(api, event.project_id)
-    if projections_up_to_date(api, event.project_id, project_info=project_info):
+    project_info = await get_project_info(api, event.project_id)
+    if await projections_up_to_date(api, event.project_id, project_info=project_info):
         sly.logger.debug("Projections are up to date. Loading from file.")
         image_infos, projections = await get_projections(
             api, event.project_id, project_info=project_info

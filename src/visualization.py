@@ -55,7 +55,7 @@ async def save_projections(
     project_info: Optional[sly.ProjectInfo] = None,
 ):
     if project_info is None:
-        project_info = get_project_info(api, project_id)
+        project_info = await get_project_info(api, project_id)
     data = []
     for info, proj in zip(image_infos, projections):
         data.append({"image_info": info.to_json(), "projection": proj})
@@ -70,8 +70,8 @@ async def get_projections(
     api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
     if project_info is None:
-        project_info = get_project_info(api, project_id)
-    file_info = get_file_info(api, project_info.team_id, projections_path(project_id))
+        project_info = await get_project_info(api, project_id)
+    file_info = await get_file_info(api, project_info.team_id, projections_path(project_id))
     if file_info is None:
         sly.logger.warning(
             "File with projections not found",
@@ -86,17 +86,17 @@ async def get_projections(
     return image_infos, projections
 
 
-def projections_up_to_date(
+async def projections_up_to_date(
     api: sly.Api,
     project_id: int,
     project_info: Optional[sly.ProjectInfo] = None,
     file_info: Optional[FileInfo] = None,
 ) -> bool:
     if project_info is None:
-        project_info = get_project_info(api, project_id)
+        project_info = await get_project_info(api, project_id)
 
     if file_info is None:
-        file_info = get_file_info(api, project_info.team_id, projections_path(project_id))
+        file_info = await get_file_info(api, project_info.team_id, projections_path(project_id))
     if file_info is None:
         return False
 
