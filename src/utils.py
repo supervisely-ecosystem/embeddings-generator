@@ -341,7 +341,7 @@ async def base64_from_url(api: sly.Api, url):
     async for chunk in r.aiter_bytes():
         b += chunk
     img_base64 = base64.b64encode(b)
-    data_url = f"data:image/png;base64,{str(img_base64, "utf-8")}"
+    data_url = f"data:image/png;base64,{str(img_base64, 'utf-8')}"
     return data_url
 
 
