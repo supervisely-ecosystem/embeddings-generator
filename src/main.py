@@ -3,7 +3,6 @@ from typing import List
 
 import supervisely as sly
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from supervisely.api.module_api import ApiField
 
 import src.cas as cas
 import src.globals as g
@@ -203,10 +202,12 @@ async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -
     sly.logger.debug(f"Upserting {len(image_infos)} vectors to Qdrant.")
     for image_batch in sly.batched(image_infos):
         # Get vectors from images.
-        base64_data = [await base64_from_url(image_info.cas_url) for image_info in image_batch]
-        vectors_batch = await cas.get_vectors(
-            base64_data
-        )
+        # base64_data = [await base64_from_url(image_info.cas_url) for image_info in image_batch]
+        # vectors_batch = await cas.get_vectors(
+        #     base64_data
+        # )
+        vectors_batch = await cas.get_vectors([image_info.cas_url for image_info in image_batch])
+
         vectors_batch = fix_vectors_batch(vectors_batch)
         sly.logger.debug(f"Received {len(vectors_batch)} vectors: {vectors_batch[0]}")
         sly.logger.debug(f"Received {len(image_batch)} images: {image_batch[0]}")
