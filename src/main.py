@@ -1,4 +1,5 @@
-from typing import List
+import asyncio
+from typing import Dict, List
 
 import supervisely as sly
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -75,7 +76,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
 @app.event(Event.Search, use_state=True)
 @timeit
-async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
+async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # Examples of requests:
     # 1. Search for similar images using text prompt.
     # data = {"project_id": <your-project-id>, "limit": <limit>, "prompt": <text-prompt>}
@@ -83,6 +84,8 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     # data = {"project_id": <your-project-id>, "limit": <limit>, "image_ids": [<image-id-1>, <image-id-2>, ...]}
     # 3. Both text prompt and image IDs can be provided at the same time.
     # response =api.task.send_request(task_id, "search", data) # Do not skip response.
+    # returns a list of ImageInfoLite objects for each query.
+    # response: List[List[Dict]]
 
     sly.logger.info(
         "Searching for similar images in project %s, limit: %s. Text prompt: %s, Image IDs: %s.",
@@ -118,19 +121,33 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     image_urls = [image_info.cas_url for image_info in image_infos]
 
     # Combine text prompts and image URLs to create a query.
-    query = text_prompts + image_urls
-    sly.logger.info("Final query: %s", query)
+    queries = text_prompts + image_urls
+    sly.logger.info("Final query: %s", queries)
 
     # Vectorize the query data (can be a text prompt or an image URL).
-    query_vectors = await cas.get_vectors(query)
+    query_vectors = await cas.get_vectors(queries)
     sly.logger.debug(
         "The query has been vectorized and will be used for search. Number of vectors: %d.",
         len(query_vectors),
     )
 
-    sly.logger.debug("Found %d similar images.", len(image_infos))
+    result = []
+    tasks = []
 
-    return [image.to_json() for image in image_infos]
+    async def _search_task(project_id, vector, limit, query):
+        return (await qdrant.search(project_id, vector, limit), query)
+
+    for vector, query in zip(query_vectors, queries):
+        tasks.append(
+            asyncio.create_task(_search_task(event.project_id, vector, event.limit, query))
+        )
+
+    for task in asyncio.as_completed(tasks):
+        infos, query = task.result()
+        result.append([info.to_json() for info in infos])
+        sly.logger.debug("Found %d similar images for a query %s", len(infos), query)
+
+    return result
 
 
 @app.event(Event.Diverse, use_state=True)
