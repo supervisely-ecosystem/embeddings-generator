@@ -6,9 +6,16 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
-from functions import auto_update_all_embeddings, auto_update_embeddings, process_images
+from functions import auto_update_all_embeddings, process_images
 from src.events import Event
-from src.utils import ImageInfoLite, get_image_infos, run_safe, timeit
+from src.utils import (
+    ImageInfoLite,
+    get_image_infos,
+    get_project_info,
+    run_safe,
+    timeit,
+    update_custom_data,
+)
 from src.visualization import (
     create_projections,
     get_projections,
@@ -56,10 +63,10 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
     if event.image_ids is None:
         # Step 4: Update custom data.
-        project_info = api.project.get_info_by_id(event.project_id)
+        project_info = get_project_info(api, event.project_id)
         custom_data = project_info.custom_data or {}
         custom_data["embeddings_updated_at"] = project_info.updated_at
-        api.project.update_custom_data(event.project_id, custom_data)
+        update_custom_data(api, event.project_id, custom_data)
 
     sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
 
@@ -150,7 +157,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 @app.event(Event.Projections, use_state=True)
 @timeit
 async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
-    project_info = api.project.get_info_by_id(event.project_id)
+    project_info = get_project_info(api, event.project_id)
     if projections_up_to_date(api, event.project_id, project_info=project_info):
         sly.logger.debug("Projections are up to date. Loading from file.")
         image_infos, projections = await get_projections(

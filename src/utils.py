@@ -200,7 +200,7 @@ def with_retries(retries: int = 3, sleep_time: int = 1, on_failure: Callable = N
 
 @to_thread
 @timeit
-def get_datasets(api: sly.Api, project_id: int) -> List[sly.DatasetInfo]:
+def get_datasets(api: sly.Api, project_id: int, recursive: bool = False) -> List[sly.DatasetInfo]:
     """Returns list of datasets from the project.
 
     :param api: Instance of supervisely API.
@@ -210,7 +210,40 @@ def get_datasets(api: sly.Api, project_id: int) -> List[sly.DatasetInfo]:
     :return: List of datasets.
     :rtype: List[sly.DatasetInfo]
     """
-    return api.dataset.get_list(project_id)
+    return api.dataset.get_list(project_id, recursive=recursive)
+
+
+@to_thread
+@timeit
+def get_project_info(api: sly.Api, project_id: int) -> sly.ProjectInfo:
+    """Returns project info by ID.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param project_id: ID of the project to get info.
+    :type project_id: int
+    :return: Project info.
+    :rtype: sly.ProjectInfo
+    """
+    return api.project.get_info_by_id(project_id)
+
+
+@to_thread
+@timeit
+def update_custom_data(api: sly.Api, project_id: int, custom_data: Dict):
+    return api.project.update_custom_data(project_id, custom_data)
+
+
+@to_thread
+@timeit
+def get_all_projects(api: sly.Api) -> List[sly.ProjectInfo]:
+    return api.project.get_list_all()["entities"]
+
+
+@to_thread
+@timeit
+def get_file_info(api: sly.Api, team_id: int, path: str):
+    return api.file.get_info_by_path(team_id, path)
 
 
 @timeit

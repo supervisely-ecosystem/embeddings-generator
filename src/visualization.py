@@ -8,7 +8,15 @@ from supervisely.api.file_api import FileInfo
 
 import src.globals as g
 import src.qdrant as qdrant
-from src.utils import ImageInfoLite, get_image_infos, parse_timestamp, send_request, timeit
+from src.utils import (
+    ImageInfoLite,
+    get_file_info,
+    get_image_infos,
+    get_project_info,
+    parse_timestamp,
+    send_request,
+    timeit,
+)
 
 
 def projections_path(project_id):
@@ -23,7 +31,7 @@ async def create_projections(
         image_infos = get_image_infos(
             api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, dataset_id=dataset_id
         )
-        image_ids = [info.id for info in api.image.get_list(dataset_id)]
+        image_ids = [info.id for info in image_infos]
 
     image_infos, vectors = await qdrant.get_items_by_ids(project_id, image_ids, with_vectors=True)
     projections = await send_request(
@@ -47,7 +55,7 @@ async def save_projections(
     project_info: Optional[sly.ProjectInfo] = None,
 ):
     if project_info is None:
-        project_info = api.project.get_info_by_id(project_id)
+        project_info = get_project_info(api, project_id)
     data = []
     for info, proj in zip(image_infos, projections):
         data.append({"image_info": info.to_json(), "projection": proj})
@@ -62,8 +70,8 @@ async def get_projections(
     api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
     if project_info is None:
-        project_info = api.project.get_info_by_id(project_id)
-    file_info = api.file.get_info_by_path(project_info.team_id, projections_path(project_id))
+        project_info = get_project_info(api, project_id)
+    file_info = get_file_info(api, project_info.team_id, projections_path(project_id))
     if file_info is None:
         sly.logger.warning(
             "File with projections not found",
@@ -85,10 +93,10 @@ def projections_up_to_date(
     file_info: Optional[FileInfo] = None,
 ) -> bool:
     if project_info is None:
-        project_info = api.project.get_info_by_id(project_id)
+        project_info = get_project_info(api, project_id)
 
     if file_info is None:
-        file_info = api.file.get_info_by_path(project_info.team_id, projections_path(project_id))
+        file_info = get_file_info(api, project_info.team_id, projections_path(project_id))
     if file_info is None:
         return False
 
