@@ -68,7 +68,7 @@ api = sly.Api()
 embeddings_generator_task_id = os.getenv("TASK_ID")
 project_id = os.getenv("PROJECT_ID")
 
-current_infos = []
+current_items = []
 
 bokeh = Bokeh([])
 bokeh_iframe = IFrame()
@@ -87,7 +87,7 @@ load_project = Button("Load project")
 tabs = RadioTabs(titles=["Plot", "Gallery"], contents=[bokeh_iframe, gallery])
 
 def draw_all_projections(project_id):
-    global current_infos
+    global current_items
 
     bokeh_iframe.loading = True
     print("=====================================")
@@ -121,7 +121,7 @@ def draw_all_projections(project_id):
         radii=[0.05] * len(projections),
     )
     bokeh.add_plots([plot])
-    current_infos = infos
+    current_items = list(zip(infos, projections))
     bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="100%")
     bokeh_iframe.loading = False
 
@@ -157,13 +157,14 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
 
     print("=====================================")
     print("Init bokeh widget")
+    
 
     plot: Bokeh.Circle = bokeh._plots[0]
     this_ids = set([info["id"] for info in infos])
-    plot._x_coordinates = [plot._x_coordinates[i] for i, info in enumerate(current_infos) if info["id"] not in this_ids]
-    plot._y_coordinates = [plot._y_coordinates[i] for i, info in enumerate(current_infos) if info["id"] not in this_ids]
-    plot._radii = [plot._radii[i] for i, info in enumerate(current_infos) if info["id"] not in this_ids]
-    plot._colors = [plot._colors[i] for i, info in enumerate(current_infos) if info["id"] not in this_ids]
+    plot._x_coordinates = [item[1][1] for item in current_items if item[0]["id"] not in this_ids]
+    plot._y_coordinates = [item[1][0] for item in current_items if item[0]["id"] not in this_ids]
+    plot._radii = [0.05 for item in current_items if item[0]["id"] not in this_ids]
+    plot._colors = ["#222222" for item in current_items if item[0]["id"] not in this_ids]
 
     new_plot = Bokeh.Circle(
         x_coordinates=[projection[1] for projection in projections],
@@ -172,8 +173,14 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
         legend_label=prompt,
         radii=[0.05] * len(projections),
     )
-    bokeh.add_plots([new_plot])
-    
+    if len(bokeh._plots) > 1:
+        bokeh._plots[1] = new_plot
+    else:
+        bokeh.add_plots([new_plot])
+    bokeh._load_chart()
+    bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
+    bokeh_iframe.loading = False
+
     print("=====================================")
     print("init Gallery")
     gallery.clean_up()
@@ -183,10 +190,6 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
         gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
         print(f"image {i}/{len(infos)} added to gallery")
     gallery._update()
-
-    bokeh._load_chart()
-    bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
-    bokeh_iframe.loading = False
     gallery.loading = False
 
 
