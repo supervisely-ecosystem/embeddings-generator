@@ -7,9 +7,7 @@ class Event:
     class Embeddings:
         endpoint = "/embeddings"
 
-        def __init__(
-            self, project_id: int, force: Optional[bool], image_ids: Optional[List[int]]
-        ):
+        def __init__(self, project_id: int, force: Optional[bool], image_ids: Optional[List[int]]):
             self.project_id = project_id
             self.force = force
             self.image_ids = image_ids
@@ -74,16 +72,4 @@ class Event:
             return cls(
                 data.get(EventFields.PROJECT_ID),
                 data.get(EventFields.IMAGE_IDS),
-            )
-
-    class UpdateEmbeddings:
-        endpoint = "/update_embeddings"
-
-        def __init__(self, project_id: int):
-            self.project_id = project_id
-
-        @classmethod
-        def from_json(cls, data: Dict[str, Any]):
-            return cls(
-                data.get(EventFields.PROJECT_ID),
             )

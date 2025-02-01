@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import datetime
 from collections import namedtuple
 from functools import partial, wraps
@@ -75,7 +76,7 @@ class ImageInfoLite(_ImageInfoLite):
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.UPDATED_AT: self.updated_at,
         }
-    
+
     @classmethod
     def from_json(cls, data):
         return cls(
@@ -105,7 +106,7 @@ def timeit(func: Callable) -> Callable:
             result = await func(*args, **kwargs)
             end_time = perf_counter()
             execution_time = end_time - start_time
-            sly.logger.debug(f"{execution_time:.4f} sec | {func.__name__}")
+            _log_execution_time(func.__name__, execution_time)
             return result
 
         return async_wrapper
@@ -131,7 +132,7 @@ def _log_execution_time(function_name: str, execution_time: float) -> None:
     :param execution_time: Execution time of the function.
     :type execution_time: float
     """
-    sly.logger.debug(f"{execution_time:.4f} sec | {function_name}")
+    sly.logger.debug("%.4f sec | %s", execution_time, function_name)
 
 
 def to_thread(func: Callable) -> Callable:
@@ -160,9 +161,7 @@ def to_thread(func: Callable) -> Callable:
     return wrapper
 
 
-def with_retries(
-    retries: int = 3, sleep_time: int = 1, on_failure: Callable = None
-) -> Callable:
+def with_retries(retries: int = 3, sleep_time: int = 1, on_failure: Callable = None) -> Callable:
     """Decorator to retry the function in case of an exception.
     Works only with async functions. Custom function can be executed on failure.
     NOTE: The on_failure function should be idempotent and synchronous.
@@ -186,15 +185,13 @@ def with_retries(
                     return await func(*args, **kwargs)
                 except Exception as e:
                     sly.logger.debug(
-                        f"Failed to execute {func.__name__}, retrying. Error: {str(e)}"
+                        "Failed to execute %s, retrying. Error: %s", func.__name__, str(e)
                     )
                     await asyncio.sleep(sleep_time)
             if on_failure is not None:
                 return on_failure()
             else:
-                raise Exception(
-                    f"Failed to execute {func.__name__} after {retries} retries."
-                )
+                raise RuntimeError(f"Failed to execute {func.__name__} after {retries} retries.")
 
         return async_function_with_retries
 
@@ -216,11 +213,11 @@ def get_datasets(api: sly.Api, project_id: int) -> List[sly.DatasetInfo]:
     return api.dataset.get_list(project_id)
 
 
-@to_thread
 @timeit
-def get_image_infos(
+async def get_image_infos(
     api: sly.Api,
     cas_size: int,
+    project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
 ) -> List[ImageInfoLite]:
@@ -241,10 +238,7 @@ def get_image_infos(
     :rtype: List[ImageInfoLite]
     """
 
-    if dataset_id:
-        image_infos = api.image.get_list(dataset_id)
-    elif image_ids:
-        image_infos = api.image.get_info_by_id_batch(image_ids)
+    image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids)
 
     return [
         ImageInfoLite(
@@ -278,7 +272,7 @@ async def send_request(
     task_id: int,
     method: str,
     data: Dict,
-    context: Optional[Dict] = {},
+    context: Optional[Dict] = None,
     skip_response: bool = False,
     timeout: Optional[int] = 60,
     outside_request: bool = True,
@@ -288,6 +282,8 @@ async def send_request(
     """send_request"""
     if type(data) is not dict:
         raise TypeError("data argument has to be a dict")
+    if context is None:
+        context = {}
     context["outside_request"] = outside_request
     resp = await api.post_async(
         "tasks.request.direct",
@@ -303,3 +299,76 @@ async def send_request(
         raise_error=raise_error,
     )
     return resp.json()
+
+
+async def base64_from_url(api: sly.Api, url):
+    api._set_async_client()
+    r = await api.async_httpx_client.get(url)
+    b = bytes()
+    async for chunk in r.aiter_bytes():
+        b += chunk
+    img_base64 = base64.b64encode(b)
+    data_url = f"data:image/png;base64,{str(img_base64, "utf-8")}"
+    return data_url
+
+
+@timeit
+def fix_vectors(vectors_batch):
+    for i, vector in enumerate(vectors_batch):
+        for j, value in enumerate(vector):
+            if not isinstance(value, float):
+                sly.logger.debug(
+                    "Value %s is not of type float: %s. Converting to float.", value, type(value)
+                )
+                vectors_batch[i][j] = float(value)
+    return vectors_batch
+
+
+async def run_safe(func, *args, **kwargs):
+    try:
+        return await func(*args, **kwargs)
+    except Exception as e:
+        sly.logger.error("Error in function %s: %s", func.__name__, e, exc_info=True)
+        return None
+
+
+@timeit
+async def image_get_list_async(
+    api: sly.Api,
+    project_id: int,
+    dataset_id: int = None,
+    images_ids: List[int] = None,
+    per_page: int = 500,
+):
+    method = "images.list"
+    data = {
+        ApiField.PROJECT_ID: project_id,
+        ApiField.FORCE_METADATA_FOR_LINKS: False,
+        ApiField.PER_PAGE: per_page,
+    }
+    if dataset_id is not None:
+        data[ApiField.DATASET_ID] = dataset_id
+    if images_ids is not None:
+        data[ApiField.FILTERS] = [{"field": ApiField.ID, "operator": "in", "value": images_ids}]
+    semaphore = api.get_default_semaphore()
+    pages_count = None
+    tasks: List[asyncio.Task] = []
+
+    async def _r(data_):
+        nonlocal pages_count
+        async with semaphore:
+            response = await api.post_async(method, data_)
+            response_json = response.json()
+            items = response_json.get("entities", [])
+            pages_count = response_json["pagesCount"]
+        return [api.image._convert_json_info(item) for item in items]
+
+    data[ApiField.PAGE] = 1
+    items = await _r(data)
+
+    for page_n in range(2, pages_count + 1):
+        data[ApiField.PAGE] = page_n
+        tasks.append(asyncio.create_task(_r(data.copy())))
+    for task in tasks:
+        items.extend(await task)
+    return items

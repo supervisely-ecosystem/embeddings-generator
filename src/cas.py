@@ -22,7 +22,13 @@ class CasTaskClient(CasClient):
 
     async def get_vectors(self, queries: List[str]) -> List[List[float]]:
         return await send_request(
-            self.api, self.task_id, "get_vectors", data={}, context={"queries": queries}
+            self.api,
+            self.task_id,
+            "get_vectors",
+            data={},
+            context={"queries": queries},
+            retries=3,
+            timeout=60 * 5,
         )
 
 
@@ -35,23 +41,27 @@ class CasUrlClient(CasClient):
         self.__wait_for_start()
 
     def __wait_for_start(self):
-        logger.info(f"Connecting to CAS at {self.url}...")
+        logger.info("Connecting to CAS at %s...", self.url)
         t = time.monotonic()
         delay = 1
+        last_exception = None
         while time.monotonic() - t < self.STARTUP_TIMEOUT:
             try:
                 self.client.profile()
-                logger.info(f"Connected to CAS at {self.url}!")
+                logger.info("Connected to CAS at %s!", self.url)
                 return
-            except Exception:
+            except Exception as e:
+                last_exception = e
                 logger.debug(
-                    f"Failed to connect to CAS at {self.url}. Retrying after {delay} seconds...",
+                    "Failed to connect to CAS at %s. Retrying after %d seconds...",
+                    self.url,
+                    delay,
                     exc_info=True,
                 )
                 time.sleep(delay)
                 if delay < 4:
                     delay *= 2
-        raise RuntimeError(f"Failed to connect to CAS at {self.url}")
+        raise RuntimeError(f"Failed to connect to CAS at {self.url}") from last_exception
 
     @with_retries(retries=5, sleep_time=2)
     @timeit
