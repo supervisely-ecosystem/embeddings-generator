@@ -28,7 +28,7 @@ async def create_projections(
     api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
     if image_ids is None:
-        image_infos = get_image_infos(
+        image_infos = await get_image_infos(
             api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, dataset_id=dataset_id
         )
         image_ids = [info.id for info in image_infos]
