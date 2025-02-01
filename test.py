@@ -166,7 +166,7 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
         "search",
         data={"project_id": project_id, "prompt": prompt, "limit": limit},
     )
-    image_infos = [ImageInfoLite.from_json(info) for info in r[0]]
+    image_infos = r[0]
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
