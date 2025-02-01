@@ -2,6 +2,7 @@ from typing import List
 
 import supervisely as sly
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import Request
 
 import src.cas as cas
 import src.globals as g
@@ -10,6 +11,7 @@ from src.events import Event
 from src.functions import auto_update_all_embeddings, process_images
 from src.utils import (
     ImageInfoLite,
+    embeddings_up_to_date,
     get_image_infos,
     get_project_info,
     run_safe,
@@ -175,6 +177,20 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
             indexes.append(i)
     sly.logger.debug("Returning %d projections.", len(indexes))
     return [[image_infos[i].to_json() for i in indexes], [projections[i] for i in indexes]]
+
+
+@server.post("/embeddings_up_to_date")
+async def embeddings_up_to_date_endpoint(request: Request):
+    state = request.state.state
+    project_id = state["project_id"]
+    return await embeddings_up_to_date(g.api, project_id)
+
+
+@server.post("/projections_up_to_date")
+async def projections_up_to_date_endpoint(request: Request):
+    state = request.state.state
+    project_id = state["project_id"]
+    return await projections_up_to_date(g.api, project_id)
 
 
 scheduler = AsyncIOScheduler()

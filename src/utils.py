@@ -405,3 +405,15 @@ async def image_get_list_async(
     for task in tasks:
         items.extend(await task)
     return items
+
+
+async def embeddings_up_to_date(
+    api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
+):
+    if project_info is None:
+        project_info = await get_project_info(api, project_id)
+    custom_data = project_info.custom_data or {}
+    emb_updated_at = custom_data.get("embeddings_updated_at", None)
+    if emb_updated_at is None:
+        return False
+    return parse_timestamp(emb_updated_at) >= project_info.updated_at
