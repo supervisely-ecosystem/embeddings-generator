@@ -143,7 +143,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         )
 
     for task in asyncio.as_completed(tasks):
-        infos, query = task.result()
+        infos, query = await task
         result.append([info.to_json() for info in infos])
         sly.logger.debug("Found %d similar images for a query %s", len(infos), query)
 
