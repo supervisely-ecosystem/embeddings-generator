@@ -53,6 +53,10 @@ async def process_images(
         # in the Qdrant collection and have the same updated_at field.
         image_infos = await qdrant.get_diff(project_id, image_infos)
 
+    if len(image_infos) == 0:
+        logger.debug("All images are up-to-date.")
+        return image_infos
+
     current_progress = 0
     total_progress = len(image_infos)
     logger.debug("Images to be processed: %d.", total_progress)
@@ -80,6 +84,7 @@ async def process_images(
             total_progress,
         )
     logger.debug("All %d images have been processed.", total_progress)
+    return image_infos
 
 
 @timeit
@@ -95,7 +100,7 @@ async def update_embeddings(
     # Check if embeddings are up-to-date
     emb_updated_at = custom_data.get("embeddings_updated_at", None)
     if emb_updated_at is None or force:
-        await process_images(api, project_id)
+        image_infos = await process_images(api, project_id)
     elif parse_timestamp(emb_updated_at) < project_info.updated_at:
         # Get all datasets that were updated after the embeddings were updated.
         dataset_infos = await get_datasets(api, project_id, recursive=True)
@@ -118,13 +123,15 @@ async def update_embeddings(
                 )
             )
         image_infos = [info for result in asyncio.gather(*tasks) for info in result]
-        image_ids = [info.id for info in image_infos]
-        await process_images(api, project_id, image_ids)
+        if len(image_infos) > 0:
+            image_ids = [info.id for info in image_infos]
+            image_infos = await process_images(api, project_id, image_ids)
     else:
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
-    custom_data["embeddings_updated_at"] = project_info.updated_at
-    await update_custom_data(api, project_id, custom_data)
+    if len(image_infos) > 0:
+        custom_data["embeddings_updated_at"] = project_info.updated_at
+        await update_custom_data(api, project_id, custom_data)
 
 
 @timeit

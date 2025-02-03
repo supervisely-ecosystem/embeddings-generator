@@ -63,9 +63,9 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     await qdrant.get_or_create_collection(event.project_id)
 
     # Step 3: Process images.
-    await process_images(api, event.project_id, image_ids=event.image_ids)
+    image_infos = await process_images(api, event.project_id, image_ids=event.image_ids)
 
-    if event.image_ids is None:
+    if event.image_ids is None and len(image_infos) > 0:
         # Step 4: Update custom data.
         project_info = await get_project_info(api, event.project_id)
         custom_data = project_info.custom_data or {}
