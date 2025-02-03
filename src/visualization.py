@@ -98,8 +98,10 @@ async def projections_up_to_date(
     if file_info is None:
         file_info = await get_file_info(api, project_info.team_id, projections_path(project_id))
 
-    sly.logger.debug("project_info: %s", project_info._asdict())
-    sly.logger.debug("file_info: %s", file_info._asdict())
+    sly.logger.debug(
+        "project_info: %s", "not found" if project_info is None else project_info._asdict()
+    )
+    sly.logger.debug("file_info: %s", "not found" if file_info is None else file_info._asdict())
     if file_info is None:
         return False
 
