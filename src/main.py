@@ -214,11 +214,14 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
         )
     else:
         image_infos, vectors = await qdrant.get_items(event.project_id)
+    data = {"vectors": vectors, "reduce": True}
+    if event.reduction_dimensions:
+        data["reduction_dimensions"] = event.reduction_dimensions
     labels = await send_request(
         api,
         g.projections_service_task_id,
         "clusters",
-        data={"vectors": vectors, "reduce": True},
+        data=data,
         timeout=60 * 5,
         retries=3,
         raise_error=True,

@@ -231,10 +231,15 @@ def draw_clusters(project_id):
     r = api.task.send_request(
         embeddings_generator_task_id,
         "clusters",
-        data={"project_id": project_id},
+        data={"project_id": project_id, "reduction_dimensions": 2},
     )
     image_infos, labels = r
     print(f"Got {len(image_infos)} images")
+    print("=====================================")
+
+    print("Clusters:")
+    for label, count in defaultdict(int, {l: labels.count(l) for l in set(labels)}).items():
+        print(f"Cluster #{label}: {count} images")
     print("=====================================")
 
     print("Init bokeh widget")
@@ -244,13 +249,14 @@ def draw_clusters(project_id):
     colors = ["#222222", *sly.color.get_predefined_colors(len(unique_labels) - 1)]
     for label, color in zip(sorted(unique_labels), colors):
         this_ids = [info["id"] for info, l in zip(image_infos, labels) if l == label]
+        n = len(this_ids)
         plot = Bokeh.Circle(
-            x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
-            y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
-            colors=[color for item in current_items if item[0]["id"] not in this_ids],
+            x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
+            y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
+            colors=[color] * n,
             legend_label="Outliers" if label == -1 else "Cluster #" + str(label + 1),
             plot_id=label,
-            radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
+            radii=[0.05] * n,
         )
         plots.append(plot)
 

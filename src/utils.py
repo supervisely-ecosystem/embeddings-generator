@@ -50,6 +50,7 @@ class EventFields:
     PROMPT = "prompt"
     LIMIT = "limit"
     METHOD = "method"
+    REDUCTION_DIMENSIONS = "reduction_dimensions"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"
