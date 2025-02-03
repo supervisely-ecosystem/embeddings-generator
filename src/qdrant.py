@@ -30,6 +30,8 @@ async def delete_collection(collection_name: str) -> None:
     :param collection_name: The name of the collection to delete.
     :type collection_name: str
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     sly.logger.debug("Deleting collection %s...", collection_name)
     try:
         await client.delete_collection(collection_name)
@@ -54,6 +56,8 @@ async def get_or_create_collection(
     :return: The CollectionInfo object.
     :rtype: CollectionInfo
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     try:
         collection = await client.get_collection(collection_name)
         sly.logger.debug("Collection %s already exists.", collection_name)
@@ -75,6 +79,8 @@ async def collection_exists(collection_name: str) -> bool:
     :return: True if the collection exists, False otherwise.
     :rtype: bool
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     try:
         await client.get_collection(collection_name)
         return True
@@ -98,6 +104,8 @@ async def get_items_by_ids(
     :return: A list of vectors.
     :rtype: List[np.ndarray]
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     points = await client.retrieve(
         collection_name, image_ids, with_payload=True, with_vectors=with_vectors
     )
@@ -124,6 +132,8 @@ async def upsert(
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     payloads = get_payloads(image_infos)
     sly.logger.debug(
         "Upserting %d vectors to collection %s. %s", len(vectors), collection_name, vectors[0]
@@ -163,6 +173,8 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
     :rtype: List[ImageInfoLite]
     """
     # Get specified ids from collection, compare updated_at and return ids that need to be updated.
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     points = await client.retrieve(
         collection_name,
         [image_info.id for image_info in image_infos],
@@ -255,6 +267,8 @@ async def search(
     :return: A list of ImageInfoLite objects and vectors if return_vectors is True.
     :rtype: Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     points = await client.search(
         collection_name,
         query_vector,
@@ -283,6 +297,8 @@ async def get_items(
     :return: A tuple of ImageInfoLite objects and vectors.
     :rtype: Tuple[List[ImageInfoLite], List[np.ndarray]]
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     if not limit:
         collection = await client.get_collection(collection_name)
         limit = collection.points_count
@@ -313,6 +329,8 @@ async def diverse(
     :return: A list of diverse images as ImageInfoLite objects.
     :rtype: List[ImageInfoLite]
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     if method == QdrantFields.KMEANS:
         return await diverse_kmeans(collection_name, num_images)
     else:
@@ -342,6 +360,8 @@ async def diverse_kmeans(
     :return: A list of diverse images as ImageInfoLite objects.
     :rtype: List[ImageInfoLite]
     """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
     image_infos, vectors = await get_items(collection_name)
     if sly.is_development():
         vectors_size = asizeof.asizeof(vectors) / 1024 / 1024
