@@ -170,17 +170,30 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         "Generating diverse population for project %s. Method: %s, Limit: %s.",
         event.project_id,
         event.method,
-        event.limit,
+        event.sample_size,
     )
+    if event.image_ids:
+        image_infos, vectors = await qdrant.get_items_by_ids(
+            event.project_id, event.image_ids, with_vectors=True
+        )
+    else:
+        image_infos, vectors = await qdrant.get_items(event.project_id)
 
-    image_infos = await qdrant.diverse(
-        event.project_id,
-        event.limit,
-        event.method,
+    data = {
+        "vectors": vectors,
+        "sample_size": event.sample_size,
+        "method": event.method,
+    }
+    samples = await send_request(
+        api, task_id=g.projections_service_task_id, method="diverse", data=data
     )
-    sly.logger.debug("Generated %d diverse images.", len(image_infos))
+    result = []
+    for label, sample in samples.items():
+        result.extend([image_infos[i] for i in sample])
 
-    return [info.to_json for info in image_infos]
+    sly.logger.debug("Generated %d diverse images.", len(result))
+
+    return result
 
 
 @app.event(Event.Projections, use_state=True)

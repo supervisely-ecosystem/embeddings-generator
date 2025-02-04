@@ -1,17 +1,13 @@
-from math import sqrt
-from random import choice
 from typing import Any, Dict, List, Literal, Tuple, Union
 
 import numpy as np
 import supervisely as sly
-from pympler import asizeof
 from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
-from sklearn.cluster import KMeans
 
 import src.globals as g
-from src.utils import ImageInfoLite, QdrantFields, TupleFields, timeit, with_retries
+from src.utils import ImageInfoLite, TupleFields, timeit, with_retries
 
 client = AsyncQdrantClient(g.qdrant_host)
 
@@ -309,101 +305,6 @@ async def get_items(
     return [ImageInfoLite(point.id, **point.payload) for point in points], [
         point.vector for point in points
     ]
-
-
-@timeit
-async def diverse(
-    collection_name: str,
-    num_images: int,
-    method: str,
-) -> List[ImageInfoLite]:
-    """Generate a diverse population of images using the specified method.
-
-    :param collection_name: The name of the collection to get items from.
-    :type collection_name: str
-    :param num_images: The number of diverse images to generate.
-    :type num_images: int
-    :param method: The method to use for generating diverse images.
-    :type method: str
-    :raises ValueError: If the method is not supported.
-    :return: A list of diverse images as ImageInfoLite objects.
-    :rtype: List[ImageInfoLite]
-    """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
-    if method == QdrantFields.KMEANS:
-        return await diverse_kmeans(collection_name, num_images)
-    else:
-        raise ValueError(f"Method {method} is not supported.")
-
-
-@timeit
-async def diverse_kmeans(
-    collection_name: str,
-    num_images: int,
-    option: Literal["random", "centroids"] = None,
-    num_clusters: int = None,
-) -> List[ImageInfoLite]:
-    """Generate a diverse population of images using KMeans clustering.
-    Two options are available: "random" and "centroids".
-    The "random" option chooses a random image from each cluster.
-    The "centroids" option chooses the image closest to the centroid of each cluster.
-
-    :param collection_name: The name of the collection to get items from.
-    :type collection_name: str
-    :param num_images: The number of diverse images to generate.
-    :type num_images: int
-    :param option: The option to use for choosing images from clusters, defaults to None.
-    :type option: Literal["random", "centroids"], optional
-    :param num_clusters: The number of clusters to use in KMeans clustering.
-    :type num_clusters: int
-    :return: A list of diverse images as ImageInfoLite objects.
-    :rtype: List[ImageInfoLite]
-    """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
-    image_infos, vectors = await get_items(collection_name)
-    if sly.is_development():
-        vectors_size = asizeof.asizeof(vectors) / 1024 / 1024
-        sly.logger.debug("Vectors size: %.2f MB.", vectors_size)
-    if not num_clusters:
-        num_clusters = int(sqrt(len(image_infos) / 2))
-        sly.logger.debug("Number of clusters is set to %d.", num_clusters)
-    if not option:
-        option = QdrantFields.RANDOM
-        sly.logger.debug("Option is set to %s.", option)
-    kmeans = KMeans(n_clusters=num_clusters).fit(vectors)
-    labels = kmeans.labels_
-    sly.logger.debug("KMeans clustering with %d and %s option is done.", num_clusters, option)
-
-    diverse_images = []
-    while len(diverse_images) < num_images:
-        for cluster_id in set(labels):
-            cluster_image_infos = [
-                image_info for image_info, label in zip(image_infos, labels) if label == cluster_id
-            ]
-            if not cluster_image_infos:
-                continue
-
-            if option == QdrantFields.RANDOM:
-                # Randomly choose an image from the cluster.
-                image_info = choice(cluster_image_infos)
-            elif option == QdrantFields.CENTROIDS:
-                # Choose the image closest to the centroid of the cluster.
-                cluster_vectors = [
-                    vector for vector, label in zip(vectors, labels) if label == cluster_id
-                ]
-                centroid = np.mean(cluster_vectors, axis=0)
-                distances = [np.linalg.norm(vector - centroid) for vector in cluster_vectors]
-                image_info = cluster_image_infos[distances.index(min(distances))]
-            else:
-                raise ValueError(f"Option {option} is not supported.")
-            diverse_images.append(image_info)
-            image_infos.remove(image_info)
-            if len(diverse_images) == num_images:
-                break
-
-    return diverse_images
 
 
 @timeit

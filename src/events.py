@@ -47,17 +47,25 @@ class Event:
     class Diverse:
         endpoint = "/diverse"
 
-        def __init__(self, project_id: int, method: str, limit: int):
+        def __init__(
+            self,
+            project_id: int,
+            method: str,
+            sample_size: int,
+            image_ids: List[int],
+        ):
             self.project_id = project_id
             self.method = method
-            self.limit = limit
+            self.sample_size = sample_size
+            self.image_ids = image_ids
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
             return cls(
                 data.get(EventFields.PROJECT_ID),
                 data.get(EventFields.METHOD),
-                data.get(EventFields.LIMIT),
+                data.get(EventFields.SAMPLE_SIZE),
+                data.get(EventFields.IMAGE_IDS),
             )
 
     class Projections:
