@@ -189,7 +189,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     )
     result = []
     for label, sample in samples.items():
-        result.extend([image_infos[i] for i in sample])
+        result.extend([image_infos[i].to_json() for i in sample])
 
     sly.logger.debug("Generated %d diverse images.", len(result))
 

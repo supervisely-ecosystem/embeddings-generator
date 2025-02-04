@@ -63,7 +63,7 @@ class Event:
         def from_json(cls, data: Dict[str, Any]):
             return cls(
                 data.get(EventFields.PROJECT_ID),
-                data.get(EventFields.METHOD),
+                data.get(EventFields.METHOD, "random"),
                 data.get(EventFields.SAMPLE_SIZE),
                 data.get(EventFields.IMAGE_IDS),
             )
