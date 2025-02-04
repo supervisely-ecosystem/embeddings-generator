@@ -48,8 +48,8 @@ async def process_images(
         image_ids=image_ids,
     )
 
-    qdrant.get_or_create_collection(project_id)
-    if qdrant.collection_exists(project_id):
+    await qdrant.get_or_create_collection(project_id)
+    if await qdrant.collection_exists(project_id):
         # Get diff of image infos, check if they are already
         # in the Qdrant collection and have the same updated_at field.
         image_infos = await qdrant.get_diff(project_id, image_infos)
@@ -156,7 +156,7 @@ async def auto_update_embeddings(
         "updated_at": project_info.updated_at,
     }
     custom_data = project_info.custom_data or {}
-    if custom_data.get("embeddings", False):
+    if not custom_data.get("embeddings", False):
         logger.debug("Embeddings are not activated for project %d.", project_id, extra=log_extra)
         return
     logger.debug(
