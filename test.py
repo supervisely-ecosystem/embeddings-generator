@@ -12,6 +12,7 @@ from supervisely.app.widgets import (
     GridGalleryV2,
     IFrame,
     Input,
+    InputNumber,
     OneOf,
     RadioTabs,
     Select,
@@ -87,12 +88,14 @@ bokeh = Bokeh([])
 bokeh_iframe = IFrame()
 bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="100%")
 select_project = SelectProject(compact=False)
-input_search = Input()
+input_search = Input(placeholder="Search query")
 gallery = GridGalleryV2(5)
 search_button = Button("Search")
 load_project = Button("Load project")
 tabs = RadioTabs(titles=["Plot", "Gallery"], contents=[bokeh_iframe, gallery])
 clusters_button = Button("Clusters")
+input_sample_size = InputNumber(value=20)
+diverse_button = Button("Diverse")
 
 
 def draw_all_projections(project_id):
@@ -144,21 +147,6 @@ def draw_all_projections(project_id):
 def draw_projections_per_prompt(project_id, prompt, limit=20):
     gallery.loading = True
     bokeh_iframe.loading = True
-    print("=====================================")
-    print("Embeddings Generator Task ID and Project ID")
-    print("task_id:", embeddings_generator_task_id)
-    print("project_id:", project_id)
-    print("=====================================")
-    print("Sending request to update_embeddings...")
-
-    try:
-        r = api.task.send_request(
-            embeddings_generator_task_id,
-            "embeddings",
-            data={"project_id": project_id, "force": False},
-        )
-    except:
-        pass
 
     print("=====================================")
     print("Sending request to search...")
@@ -210,28 +198,13 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
 def draw_clusters(project_id):
     gallery.loading = True
     bokeh_iframe.loading = True
-    print("=====================================")
-    print("Embeddings Generator Task ID and Project ID")
-    print("task_id:", embeddings_generator_task_id)
-    print("project_id:", project_id)
-    print("=====================================")
-    print("Sending request to update_embeddings...")
-
-    try:
-        r = api.task.send_request(
-            embeddings_generator_task_id,
-            "embeddings",
-            data={"project_id": project_id, "force": False},
-        )
-    except:
-        pass
 
     print("=====================================")
     print("Sending request to clusters...")
     r = api.task.send_request(
         embeddings_generator_task_id,
         "clusters",
-        data={"project_id": project_id, "reduction_dimensions": 2},
+        data={"project_id": project_id, "reduce": True},
     )
     image_infos, labels = r
     print(f"Got {len(image_infos)} images")
@@ -270,6 +243,56 @@ def draw_clusters(project_id):
     gallery.loading = False
 
 
+def draw_diverse(project_id, sample_size):
+    gallery.loading = True
+    bokeh_iframe.loading = True
+    print("=====================================")
+    print("Sending request to diverse...")
+    r = api.task.send_request(
+        embeddings_generator_task_id,
+        "diverse",
+        data={"project_id": project_id, "method": "random", "sample_size": sample_size},
+    )
+    image_infos = r
+    print(f"Got {len(image_infos)} images")
+    print("=====================================")
+
+    print("Init bokeh widget")
+
+    this_ids = set([info["id"] for info in image_infos])
+    bokeh.clear()
+    plot = Bokeh.Circle(
+        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
+        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
+        colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
+        legend_label="Images",
+        plot_id=1,
+        radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
+    )
+    new_plot = Bokeh.Circle(
+        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
+        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
+        colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
+        legend_label="Sample",
+        radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
+    )
+    bokeh.add_plots([plot, new_plot])
+    bokeh._load_chart()
+    bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
+    bokeh_iframe.loading = False
+
+    print("=====================================")
+    print("init Gallery")
+    gallery.clean_up()
+    project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
+    for i, info in enumerate(image_infos, 1):
+        ann_info = api.annotation.download(info["id"])
+        gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
+        print(f"image {i}/{len(image_infos)} added to gallery")
+    gallery._update()
+    gallery.loading = False
+
+
 @load_project.click
 def load_project_click():
     project_id = select_project.get_selected_id()
@@ -290,7 +313,23 @@ def clusters_click():
     draw_clusters(project_id)
 
 
+@diverse_button.click
+def diverse_click():
+    project_id = select_project.get_selected_id()
+    sample_size = input_sample_size.get_value()
+    draw_diverse(project_id, sample_size)
+
+
 layout = Container(
-    widgets=[select_project, load_project, input_search, search_button, clusters_button, tabs]
+    widgets=[
+        select_project,
+        load_project,
+        input_search,
+        search_button,
+        clusters_button,
+        input_sample_size,
+        diverse_button,
+        tabs,
+    ]
 )
 app = sly.Application(layout=layout)
