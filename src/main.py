@@ -10,11 +10,13 @@ import src.globals as g
 import src.qdrant as qdrant
 from src.events import Event
 from src.functions import auto_update_all_embeddings, process_images
+from src.pointcloud import upload as upload_pcd
 from src.utils import (
     ImageInfoLite,
     embeddings_up_to_date,
     get_image_infos,
     get_project_info,
+    parse_timestamp,
     run_safe,
     send_request,
     timeit,
@@ -22,7 +24,10 @@ from src.utils import (
 )
 from src.visualization import (
     create_projections,
+    get_or_create_projections_dataset,
+    get_pcd_info,
     get_projections,
+    get_projections_pcd_name,
     projections_up_to_date,
     save_projections,
 )
@@ -201,16 +206,37 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 @timeit
 async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
     project_info = await get_project_info(api, event.project_id)
-    if await projections_up_to_date(api, event.project_id, project_info=project_info):
-        sly.logger.debug("Projections are up to date. Loading from file.")
-        image_infos, projections = await get_projections(
+    pcd_info = None
+    try:
+        pcd_info: sly.api.pointcloud_api.PointcloudInfo = await get_pcd_info(
             api, event.project_id, project_info=project_info
         )
+    except ValueError as e:
+        sly.logger.debug("Projections not found. Creating new projections.")
     else:
-        sly.logger.debug("Projections are not up to date. Creating new projections.")
-        image_infos, projections = await create_projections(api, event.project_id)
-        await save_projections(
-            api, event.project_id, image_infos, projections, project_info=project_info
+        if parse_timestamp(pcd_info.updated_at) < parse_timestamp(project_info.updated_at):
+            sly.logger.debug("Projections are not up to date. Creating new projections.")
+            pcd_info = None
+
+    if pcd_info is None:
+        pcd_dataset_info = await get_or_create_projections_dataset(
+            api, project_info.id, image_project_info=project_info
+        )
+        # create new projections
+        image_infos, projections = await create_projections(
+            api, event.project_id, image_ids=event.image_ids
+        )
+        # save projections
+        pcd_info = await upload_pcd(
+            api,
+            projections,
+            get_projections_pcd_name(),
+            pcd_dataset_info.id,
+            [info.id for info in image_infos],
+        )
+    else:
+        image_infos, projections = await get_projections(
+            api, event.project_id, project_info=project_info, pcd_info=pcd_info
         )
     indexes = []
     for i, info in enumerate(image_infos):

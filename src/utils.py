@@ -1,6 +1,9 @@
 import asyncio
 import base64
 import datetime
+import os
+import shutil
+import tempfile
 from collections import namedtuple
 from functools import partial, wraps
 from time import perf_counter
@@ -228,6 +231,69 @@ def get_project_info(api: sly.Api, project_id: int) -> sly.ProjectInfo:
     :rtype: sly.ProjectInfo
     """
     return api.project.get_info_by_id(project_id)
+
+
+def _get_project_info_by_name(
+    api: sly.Api, workspace_id: int, project_name: str
+) -> sly.ProjectInfo:
+    return api.project.get_info_by_name(workspace_id, project_name)
+
+
+@to_thread
+@timeit
+def get_project_info_by_name(api: sly.Api, workspace_id: int, project_name: str) -> sly.ProjectInfo:
+    """Returns project info by name.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param workspace_id: ID of the workspace to get project from.
+    :type workspace_id: int
+    :param project_name: Name of the project to get info.
+    :type project_name: str
+    :return: Project info.
+    :rtype: sly.ProjectInfo
+    """
+    return _get_project_info_by_name(api, workspace_id, project_name)
+
+
+def _get_or_create_project(
+    api: sly.Api, workspace_id: int, project_name: str, project_type: str
+) -> sly.ProjectInfo:
+    project_info = _get_project_info_by_name(api, workspace_id, project_name)
+    if project_info is None:
+        project_info = api.project.create(workspace_id, project_name, project_type)
+    return project_info
+
+
+@to_thread
+@timeit
+def get_or_create_project(
+    api: sly.Api, workspace_id: int, project_name: str, project_type: str
+) -> sly.ProjectInfo:
+    return _get_or_create_project(api, workspace_id, project_name, project_type)
+
+
+@to_thread
+@timeit
+def get_dataset_by_name(api: sly.Api, project_id: int, dataset_name: str) -> sly.DatasetInfo:
+    return api.dataset.get_info_by_name(project_id, name=dataset_name)
+
+
+@to_thread
+@timeit
+def get_or_create_dataset(api: sly.Api, project_id: int, dataset_name: str) -> sly.DatasetInfo:
+    dataset_info = api.dataset.get_info_by_name(project_id, name=dataset_name)
+    if dataset_info is None:
+        dataset_info = api.dataset.create(project_id, dataset_name)
+    return dataset_info
+
+
+@to_thread
+@timeit
+def get_pcd_by_name(
+    api: sly.Api, dataset_id: int, pcd_name: str
+) -> sly.api.pointcloud_api.PointcloudInfo:
+    return api.pointcloud.get_info_by_name(dataset_id, pcd_name)
 
 
 @to_thread

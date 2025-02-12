@@ -8,11 +8,17 @@ from supervisely.api.file_api import FileInfo
 
 import src.globals as g
 import src.qdrant as qdrant
+from src.pointcloud import download as download_pcd
 from src.utils import (
     ImageInfoLite,
+    get_dataset_by_name,
     get_file_info,
     get_image_infos,
+    get_or_create_dataset,
+    get_or_create_project,
+    get_pcd_by_name,
     get_project_info,
+    get_project_info_by_name,
     parse_timestamp,
     send_request,
     timeit,
@@ -21,6 +27,18 @@ from src.utils import (
 
 def projections_path(project_id):
     return f"/embeddings/visualizations/{project_id}/projections.json"
+
+
+def projections_project_name():
+    return "Embeddings projections"
+
+
+def projections_dataset_name(project_id):
+    return str(project_id)
+
+
+def get_projections_pcd_name():
+    return "pcd_2_dim.pcd"
 
 
 @timeit
@@ -38,7 +56,7 @@ async def create_projections(
         api,
         g.projections_service_task_id,
         "projections",
-        data={"vectors": vectors, "method": "UMAP"},
+        data={"vectors": vectors, "method": "umap"},
         timeout=60 * 5,
         retries=3,
         raise_error=True,
@@ -66,24 +84,63 @@ async def save_projections(
 
 
 @timeit
-async def get_projections(
+async def get_pcd_info(
     api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
-) -> Tuple[List[ImageInfoLite], List[List[float]]]:
+) -> sly.api.pointcloud_api.PointcloudInfo:
     if project_info is None:
         project_info = await get_project_info(api, project_id)
-    file_info = await get_file_info(api, project_info.team_id, projections_path(project_id))
-    if file_info is None:
-        sly.logger.warning(
-            "File with projections not found",
-            extra={"project_id": project_id, "path": projections_path(project_id)},
+    pcd_project_info = await get_project_info_by_name(
+        api, project_info.workspace_id, projections_project_name()
+    )
+    if pcd_project_info is None:
+        raise ValueError(f"Project with projections not found: {projections_project_name()}")
+
+    pcd_dataset_info = await get_dataset_by_name(api, pcd_project_info.id, str(project_info.id))
+    if pcd_dataset_info is None:
+        raise ValueError(
+            f"Dataset with projections not found: {projections_dataset_name(project_id)}"
         )
-        return [], []
-    with tempfile.NamedTemporaryFile("r") as f:
-        await api.file.download_async(project_info.team_id, projections_path(project_id), f.name)
-        data = json.load(f)
-    image_infos = [ImageInfoLite.from_json(item["image_info"]) for item in data]
-    projections = [item["projection"] for item in data]
-    return image_infos, projections
+
+    pcd_item_info: sly.api.pointcloud_api.PointcloudInfo = await get_pcd_by_name(
+        api, pcd_dataset_info.id, get_projections_pcd_name()
+    )
+    if pcd_item_info is None:
+        raise ValueError("PCD with projections not found: pcd_2_dim.pcd")
+    return pcd_item_info
+
+
+@timeit
+async def get_projections(
+    api: sly.Api,
+    project_id: int,
+    project_info: Optional[sly.ProjectInfo] = None,
+    pcd_info: Optional[sly.api.pointcloud_api.PointcloudInfo] = None,
+) -> Tuple[List[ImageInfoLite], List[List[float]]]:
+    if pcd_info is None:
+        if project_info is None:
+            project_info = await get_project_info(api, project_id)
+        pcd_info = await get_pcd_info(api, project_id, project_info)
+
+    pcd = await download_pcd(api, pcd_info.id)
+    vectors = pcd.points[:, :2]
+    image_ids = pcd.image_ids
+    image_infos = await get_image_infos(
+        api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, image_ids=image_ids
+    )
+    return image_infos, vectors.tolist()
+
+
+async def get_or_create_projections_dataset(
+    api: sly.Api, image_project_id: int, image_project_info: sly.ProjectInfo = None
+) -> sly.DatasetInfo:
+    if image_project_info is None:
+        image_project_info = await get_project_info(api, image_project_id)
+    workspace_id = image_project_info.workspace_id
+    project_info = await get_or_create_project(
+        api, workspace_id, projections_project_name(), project_type=sly.ProjectType.POINT_CLOUDS
+    )
+    dataset_info = await get_or_create_dataset(api, project_info.id, str(image_project_id))
+    return dataset_info
 
 
 async def projections_up_to_date(
