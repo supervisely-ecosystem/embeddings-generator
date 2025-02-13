@@ -155,19 +155,42 @@ async def projections_up_to_date(
     api: sly.Api,
     project_id: int,
     project_info: Optional[sly.ProjectInfo] = None,
-    file_info: Optional[FileInfo] = None,
 ) -> bool:
+    try:
+        pcd_info = await get_pcd_info(api, project_id)
+    except ValueError:
+        return False
     if project_info is None:
         project_info = await get_project_info(api, project_id)
+    return parse_timestamp(pcd_info.updated_at) >= parse_timestamp(project_info.updated_at)
 
-    if file_info is None:
-        file_info = await get_file_info(api, project_info.team_id, projections_path(project_id))
 
-    sly.logger.debug(
-        "project_info: %s", "not found" if project_info is None else project_info._asdict()
-    )
-    sly.logger.debug("file_info: %s", "not found" if file_info is None else file_info._asdict())
-    if file_info is None:
-        return False
+async def get_or_create_projections(api: sly.Api, project_id, project_info):
+    if project_info is None:
+        project_info = api.project.get_info_by_id(project_id)
+    try:
+        pcd_info: sly.api.pointcloud_api.PointcloudInfo = await get_pcd_info(
+            api, project_id, project_info=project_info
+        )
+    except ValueError as e:
+        sly.logger.debug("Projections not found. Creating new projections.")
+    else:
+        if parse_timestamp(pcd_info.updated_at) < parse_timestamp(project_info.updated_at):
+            sly.logger.debug("Projections are not up to date. Creating new projections.")
+            pcd_info = None
 
-    return parse_timestamp(file_info.updated_at) > parse_timestamp(project_info.updated_at)
+    if pcd_info is None:
+        # create new projections
+        image_infos, projections = await create_projections(api, project_id, image_ids=image_ids)
+        # save projections
+        await save_projections(
+            api,
+            project_id=project_id,
+            image_infos=image_infos,
+            projections=projections,
+            project_info=project_info,
+        )
+    else:
+        image_infos, projections = await get_projections(
+            api, project_id, project_info=project_info, pcd_info=pcd_info
+        )
