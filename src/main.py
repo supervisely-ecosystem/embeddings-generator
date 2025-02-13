@@ -1,15 +1,18 @@
 import asyncio
+import datetime
 from typing import Dict, List
 
 import supervisely as sly
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Request
+from supervisely.imaging.color import get_predefined_colors
 
 import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.events import Event
 from src.functions import auto_update_all_embeddings, process_images
+from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
 from src.utils import (
     ImageInfoLite,
@@ -219,20 +222,17 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
             pcd_info = None
 
     if pcd_info is None:
-        pcd_dataset_info = await get_or_create_projections_dataset(
-            api, project_info.id, image_project_info=project_info
-        )
         # create new projections
         image_infos, projections = await create_projections(
             api, event.project_id, image_ids=event.image_ids
         )
         # save projections
-        pcd_info = await upload_pcd(
+        await save_projections(
             api,
-            projections,
-            get_projections_pcd_name(),
-            pcd_dataset_info.id,
-            [info.id for info in image_infos],
+            project_id=event.project_id,
+            image_infos=image_infos,
+            projections=projections,
+            project_info=project_info,
         )
     else:
         image_infos, projections = await get_projections(
@@ -266,6 +266,34 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
         retries=3,
         raise_error=True,
     )
+    if event.save:
+        project_info = await get_project_info(api, event.project_id)
+        image_infos, vectors = await get_projections(
+            api, event.project_id, project_info=project_info
+        )
+        image_infos, vectors = zip(
+            *[
+                (image_info, vector)
+                for image_info, vector in zip(image_infos, vectors)
+                if event.image_ids is None or image_info.id in event.image_ids
+            ]
+        )
+        dataset = await get_or_create_projections_dataset(
+            api, event.project_id, image_project_info=project_info
+        )
+
+        palette = get_predefined_colors((len(labels)))
+        colors = [palette[(label + 1) % len(palette)] for label in labels]
+        await upload_pcd(
+            api,
+            vectors,
+            [info.id for info in image_infos],
+            f"clusters_{datetime.datetime.now()}.pcd",
+            dataset.id,
+            cluster_ids=labels,
+            colors=colors,
+        )
+
     return [info.to_json() for info in image_infos], labels
 
 

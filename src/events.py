@@ -90,10 +90,12 @@ class Event:
             project_id: int,
             image_ids: Optional[List[int]] = None,
             reduction_dimensions: Optional[int] = None,
+            save: Optional[bool] = False,
         ):
             self.project_id = project_id
             self.image_ids = image_ids
             self.reduction_dimensions = reduction_dimensions
+            self.save = save
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -101,4 +103,5 @@ class Event:
                 data.get(EventFields.PROJECT_ID),
                 data.get(EventFields.IMAGE_IDS),
                 data.get(EventFields.REDUCTION_DIMENSIONS),
+                data.get(EventFields.SAVE),
             )

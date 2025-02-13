@@ -55,6 +55,7 @@ class EventFields:
     METHOD = "method"
     REDUCTION_DIMENSIONS = "reduction_dimensions"
     SAMPLE_SIZE = "sample_size"
+    SAVE = "save"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"

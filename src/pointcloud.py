@@ -177,16 +177,20 @@ class EmbeddingsVisPCD:
 @to_thread
 @timeit
 def upload(
-    api: sly.Api, pointcloud: np.ndarray, pcd_name: str, dataset_id: int, image_ids: List[int]
+    api: sly.Api,
+    pointcloud: np.ndarray,
+    image_ids: List[int],
+    pcd_name: str,
+    dataset_id: int,
+    cluster_ids: List[int] = None,
+    colors: List = None,
 ) -> sly.api.pointcloud_api.PointcloudInfo:
     if not isinstance(pointcloud, np.ndarray):
         pointcloud = np.array(pointcloud)
     if pointcloud.shape[1] == 2:
         pointcloud = np.hstack((pointcloud, np.zeros((pointcloud.shape[0], 1), dtype=np.float32)))
-    sly.logger.debug(f"Pointcloud shape: {pointcloud.shape}")
-    sly.logger.debug(f"image_ids len: {len(image_ids)}")
 
-    pcd = EmbeddingsVisPCD(pointcloud, image_ids=image_ids)
+    pcd = EmbeddingsVisPCD(pointcloud, image_ids=image_ids, cluster_ids=cluster_ids, colors=colors)
     tmp = tempfile.NamedTemporaryFile("w+b", suffix=".pcd", delete=False)
     try:
         pcd.save(tmp.name)

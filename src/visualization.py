@@ -9,6 +9,7 @@ from supervisely.api.file_api import FileInfo
 import src.globals as g
 import src.qdrant as qdrant
 from src.pointcloud import download as download_pcd
+from src.pointcloud import upload as upload_pcd
 from src.utils import (
     ImageInfoLite,
     get_dataset_by_name,
@@ -71,16 +72,23 @@ async def save_projections(
     image_infos: List[ImageInfoLite],
     projections: List[List[float]],
     project_info: Optional[sly.ProjectInfo] = None,
+    cluster_labels: List[int] = None,
 ):
     if project_info is None:
         project_info = await get_project_info(api, project_id)
-    data = []
-    for info, proj in zip(image_infos, projections):
-        data.append({"image_info": info.to_json(), "projection": proj})
-    with open("tmp.json", "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    await api.file.upload_async(project_info.team_id, "tmp.json", projections_path(project_id))
-    Path("tmp.json").unlink()
+    pcd_dataset_info = await get_or_create_projections_dataset(
+        api, project_info.id, image_project_info=project_info
+    )
+
+    pcd_info = await upload_pcd(
+        api,
+        projections,
+        [info.id for info in image_infos],
+        get_projections_pcd_name(),
+        pcd_dataset_info.id,
+        cluster_labels,
+    )
+    return pcd_info
 
 
 @timeit
