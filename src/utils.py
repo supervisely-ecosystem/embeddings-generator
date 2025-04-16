@@ -306,7 +306,7 @@ def update_custom_data(api: sly.Api, project_id: int, custom_data: Dict):
 @to_thread
 @timeit
 def get_all_projects(api: sly.Api) -> List[sly.ProjectInfo]:
-    return api.project.get_list_all()["entities"]
+    return api.project.get_list_all()["entities"]  # TODO: filter by custom data or flag
 
 
 @to_thread

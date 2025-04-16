@@ -11,7 +11,7 @@ import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.events import Event
-from src.functions import auto_update_all_embeddings, process_images
+from src.functions import auto_update_all_embeddings, process_images, update_embeddings
 from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
 from src.utils import (
@@ -222,6 +222,14 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
             pcd_info = None
 
     if pcd_info is None:
+        # update embeddings
+        await update_embeddings(
+            api,
+            event.project_id,
+            force=False,
+            project_info=project_info,
+        )
+
         # create new projections
         image_infos, projections = await create_projections(
             api, event.project_id, image_ids=event.image_ids
