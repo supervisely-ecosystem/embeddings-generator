@@ -1,11 +1,17 @@
 import asyncio
+import base64
+import datetime
+import os
+import shutil
+import tempfile
 from collections import namedtuple
 from functools import partial, wraps
 from time import perf_counter
-from typing import Callable, List
+from typing import Callable, Dict, List, Optional
 
 import supervisely as sly
 from supervisely._utils import resize_image_url
+from supervisely.api.module_api import ApiField
 
 
 class TupleFields:
@@ -40,19 +46,23 @@ class EventFields:
     """Fields of the event in request objects."""
 
     PROJECT_ID = "project_id"
+    DATASET_ID = "dataset_id"
     TEAM_ID = "team_id"
     IMAGE_IDS = "image_ids"
     FORCE = "force"
     PROMPT = "prompt"
     LIMIT = "limit"
     METHOD = "method"
+    REDUCTION_DIMENSIONS = "reduction_dimensions"
+    SAMPLE_SIZE = "sample_size"
+    SAVE = "save"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"
 
 
-ImageInfoLite = namedtuple(
-    "ImageInfoLite",
+_ImageInfoLite = namedtuple(
+    "_ImageInfoLite",
     [
         TupleFields.ID,
         TupleFields.DATASET_ID,
@@ -61,6 +71,27 @@ ImageInfoLite = namedtuple(
         TupleFields.UPDATED_AT,
     ],
 )
+
+
+class ImageInfoLite(_ImageInfoLite):
+    def to_json(self):
+        return {
+            TupleFields.ID: self.id,
+            TupleFields.DATASET_ID: self.dataset_id,
+            TupleFields.FULL_URL: self.full_url,
+            TupleFields.CAS_URL: self.cas_url,
+            TupleFields.UPDATED_AT: self.updated_at,
+        }
+
+    @classmethod
+    def from_json(cls, data):
+        return cls(
+            id=data[TupleFields.ID],
+            dataset_id=data[TupleFields.DATASET_ID],
+            full_url=data[TupleFields.FULL_URL],
+            cas_url=data[TupleFields.CAS_URL],
+            updated_at=data[TupleFields.UPDATED_AT],
+        )
 
 
 def timeit(func: Callable) -> Callable:
@@ -81,7 +112,7 @@ def timeit(func: Callable) -> Callable:
             result = await func(*args, **kwargs)
             end_time = perf_counter()
             execution_time = end_time - start_time
-            sly.logger.debug(f"{execution_time:.4f} sec | {func.__name__}")
+            _log_execution_time(func.__name__, execution_time)
             return result
 
         return async_wrapper
@@ -107,7 +138,7 @@ def _log_execution_time(function_name: str, execution_time: float) -> None:
     :param execution_time: Execution time of the function.
     :type execution_time: float
     """
-    sly.logger.debug(f"{execution_time:.4f} sec | {function_name}")
+    sly.logger.debug("%.4f sec | %s", execution_time, function_name)
 
 
 def to_thread(func: Callable) -> Callable:
@@ -136,9 +167,7 @@ def to_thread(func: Callable) -> Callable:
     return wrapper
 
 
-def with_retries(
-    retries: int = 3, sleep_time: int = 1, on_failure: Callable = None
-) -> Callable:
+def with_retries(retries: int = 3, sleep_time: int = 1, on_failure: Callable = None) -> Callable:
     """Decorator to retry the function in case of an exception.
     Works only with async functions. Custom function can be executed on failure.
     NOTE: The on_failure function should be idempotent and synchronous.
@@ -162,15 +191,13 @@ def with_retries(
                     return await func(*args, **kwargs)
                 except Exception as e:
                     sly.logger.debug(
-                        f"Failed to execute {func.__name__}, retrying. Error: {str(e)}"
+                        "Failed to execute %s, retrying. Error: %s", func.__name__, str(e)
                     )
                     await asyncio.sleep(sleep_time)
             if on_failure is not None:
                 return on_failure()
             else:
-                raise Exception(
-                    f"Failed to execute {func.__name__} after {retries} retries."
-                )
+                raise RuntimeError(f"Failed to execute {func.__name__} after {retries} retries.")
 
         return async_function_with_retries
 
@@ -179,7 +206,7 @@ def with_retries(
 
 @to_thread
 @timeit
-def get_datasets(api: sly.Api, project_id: int) -> List[sly.DatasetInfo]:
+def get_datasets(api: sly.Api, project_id: int, recursive: bool = False) -> List[sly.DatasetInfo]:
     """Returns list of datasets from the project.
 
     :param api: Instance of supervisely API.
@@ -189,14 +216,110 @@ def get_datasets(api: sly.Api, project_id: int) -> List[sly.DatasetInfo]:
     :return: List of datasets.
     :rtype: List[sly.DatasetInfo]
     """
-    return api.dataset.get_list(project_id)
+    return api.dataset.get_list(project_id, recursive=recursive)
 
 
 @to_thread
 @timeit
-def get_image_infos(
+def get_project_info(api: sly.Api, project_id: int) -> sly.ProjectInfo:
+    """Returns project info by ID.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param project_id: ID of the project to get info.
+    :type project_id: int
+    :return: Project info.
+    :rtype: sly.ProjectInfo
+    """
+    return api.project.get_info_by_id(project_id)
+
+
+def _get_project_info_by_name(
+    api: sly.Api, workspace_id: int, project_name: str
+) -> sly.ProjectInfo:
+    return api.project.get_info_by_name(workspace_id, project_name)
+
+
+@to_thread
+@timeit
+def get_project_info_by_name(api: sly.Api, workspace_id: int, project_name: str) -> sly.ProjectInfo:
+    """Returns project info by name.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param workspace_id: ID of the workspace to get project from.
+    :type workspace_id: int
+    :param project_name: Name of the project to get info.
+    :type project_name: str
+    :return: Project info.
+    :rtype: sly.ProjectInfo
+    """
+    return _get_project_info_by_name(api, workspace_id, project_name)
+
+
+def _get_or_create_project(
+    api: sly.Api, workspace_id: int, project_name: str, project_type: str
+) -> sly.ProjectInfo:
+    project_info = _get_project_info_by_name(api, workspace_id, project_name)
+    if project_info is None:
+        project_info = api.project.create(workspace_id, project_name, project_type)
+    return project_info
+
+
+@to_thread
+@timeit
+def get_or_create_project(
+    api: sly.Api, workspace_id: int, project_name: str, project_type: str
+) -> sly.ProjectInfo:
+    return _get_or_create_project(api, workspace_id, project_name, project_type)
+
+
+@to_thread
+@timeit
+def get_dataset_by_name(api: sly.Api, project_id: int, dataset_name: str) -> sly.DatasetInfo:
+    return api.dataset.get_info_by_name(project_id, name=dataset_name)
+
+
+@to_thread
+@timeit
+def get_or_create_dataset(api: sly.Api, project_id: int, dataset_name: str) -> sly.DatasetInfo:
+    dataset_info = api.dataset.get_info_by_name(project_id, name=dataset_name)
+    if dataset_info is None:
+        dataset_info = api.dataset.create(project_id, dataset_name)
+    return dataset_info
+
+
+@to_thread
+@timeit
+def get_pcd_by_name(
+    api: sly.Api, dataset_id: int, pcd_name: str
+) -> sly.api.pointcloud_api.PointcloudInfo:
+    return api.pointcloud.get_info_by_name(dataset_id, pcd_name)
+
+
+@to_thread
+@timeit
+def update_custom_data(api: sly.Api, project_id: int, custom_data: Dict):
+    return api.project.update_custom_data(project_id, custom_data)
+
+
+@to_thread
+@timeit
+def get_all_projects(api: sly.Api) -> List[sly.ProjectInfo]:
+    return api.project.get_list_all()["entities"]  # TODO: filter by custom data or flag
+
+
+@to_thread
+@timeit
+def get_file_info(api: sly.Api, team_id: int, path: str):
+    return api.file.get_info_by_path(team_id, path)
+
+
+@timeit
+async def get_image_infos(
     api: sly.Api,
     cas_size: int,
+    project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
 ) -> List[ImageInfoLite]:
@@ -217,10 +340,7 @@ def get_image_infos(
     :rtype: List[ImageInfoLite]
     """
 
-    if dataset_id:
-        image_infos = api.image.get_list(dataset_id)
-    elif image_ids:
-        image_infos = api.image.get_info_by_id_batch(image_ids)
+    image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids)
 
     return [
         ImageInfoLite(
@@ -237,3 +357,132 @@ def get_image_infos(
         )
         for image_info in image_infos
     ]
+
+
+def parse_timestamp(
+    timestamp: str, timestamp_format: str = "%Y-%m-%dT%H:%M:%S.%fZ"
+) -> datetime.datetime:
+    """
+    Parse timestamp string to datetime object.
+    Timestamp format: "2021-01-22T19:37:50.158Z".
+    """
+    return datetime.datetime.strptime(timestamp, timestamp_format)
+
+
+async def send_request(
+    api: sly.Api,
+    task_id: int,
+    method: str,
+    data: Dict,
+    context: Optional[Dict] = None,
+    skip_response: bool = False,
+    timeout: Optional[int] = 60,
+    outside_request: bool = True,
+    retries: int = 10,
+    raise_error: bool = False,
+):
+    """send_request"""
+    if type(data) is not dict:
+        raise TypeError("data argument has to be a dict")
+    if context is None:
+        context = {}
+    context["outside_request"] = outside_request
+    resp = await api.post_async(
+        "tasks.request.direct",
+        {
+            ApiField.TASK_ID: task_id,
+            ApiField.COMMAND: method,
+            ApiField.CONTEXT: context,
+            ApiField.STATE: data,
+            "skipResponse": skip_response,
+            "timeout": timeout,
+        },
+        retries=retries,
+        raise_error=raise_error,
+    )
+    return resp.json()
+
+
+async def base64_from_url(api: sly.Api, url):
+    api._set_async_client()
+    r = await api.async_httpx_client.get(url)
+    b = bytes()
+    async for chunk in r.aiter_bytes():
+        b += chunk
+    img_base64 = base64.b64encode(b)
+    data_url = f"data:image/png;base64,{str(img_base64, 'utf-8')}"
+    return data_url
+
+
+@timeit
+def fix_vectors(vectors_batch):
+    for i, vector in enumerate(vectors_batch):
+        for j, value in enumerate(vector):
+            if not isinstance(value, float):
+                sly.logger.debug(
+                    "Value %s is not of type float: %s. Converting to float.", value, type(value)
+                )
+                vectors_batch[i][j] = float(value)
+    return vectors_batch
+
+
+async def run_safe(func, *args, **kwargs):
+    try:
+        return await func(*args, **kwargs)
+    except Exception as e:
+        sly.logger.error("Error in function %s: %s", func.__name__, e, exc_info=True)
+        return None
+
+
+@timeit
+async def image_get_list_async(
+    api: sly.Api,
+    project_id: int,
+    dataset_id: int = None,
+    images_ids: List[int] = None,
+    per_page: int = 500,
+):
+    method = "images.list"
+    data = {
+        ApiField.PROJECT_ID: project_id,
+        ApiField.FORCE_METADATA_FOR_LINKS: False,
+        ApiField.PER_PAGE: per_page,
+    }
+    if dataset_id is not None:
+        data[ApiField.DATASET_ID] = dataset_id
+    if images_ids is not None:
+        data[ApiField.FILTERS] = [{"field": ApiField.ID, "operator": "in", "value": images_ids}]
+    semaphore = api.get_default_semaphore()
+    pages_count = None
+    tasks: List[asyncio.Task] = []
+
+    async def _r(data_):
+        nonlocal pages_count
+        async with semaphore:
+            response = await api.post_async(method, data_)
+            response_json = response.json()
+            items = response_json.get("entities", [])
+            pages_count = response_json["pagesCount"]
+        return [api.image._convert_json_info(item) for item in items]
+
+    data[ApiField.PAGE] = 1
+    items = await _r(data)
+
+    for page_n in range(2, pages_count + 1):
+        data[ApiField.PAGE] = page_n
+        tasks.append(asyncio.create_task(_r(data.copy())))
+    for task in tasks:
+        items.extend(await task)
+    return items
+
+
+async def embeddings_up_to_date(
+    api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
+):
+    if project_info is None:
+        project_info = await get_project_info(api, project_id)
+    custom_data = project_info.custom_data or {}
+    emb_updated_at = custom_data.get("embeddings_updated_at", None)
+    if emb_updated_at is None:
+        return False
+    return parse_timestamp(emb_updated_at) >= project_info.updated_at

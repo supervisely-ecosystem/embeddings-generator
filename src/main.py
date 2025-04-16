@@ -1,60 +1,100 @@
-from typing import List
+import asyncio
+import datetime
+from typing import Dict, List
 
 import supervisely as sly
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import Request
+from supervisely.imaging.color import get_predefined_colors
 
 import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.events import Event
-from src.utils import ImageInfoLite, get_datasets, get_image_infos, timeit
+from src.functions import auto_update_all_embeddings, process_images, update_embeddings
+from src.pointcloud import download as download_pcd
+from src.pointcloud import upload as upload_pcd
+from src.utils import (
+    ImageInfoLite,
+    embeddings_up_to_date,
+    get_image_infos,
+    get_project_info,
+    parse_timestamp,
+    run_safe,
+    send_request,
+    timeit,
+    update_custom_data,
+)
+from src.visualization import (
+    create_projections,
+    get_or_create_projections_dataset,
+    get_pcd_info,
+    get_projections,
+    get_projections_pcd_name,
+    projections_up_to_date,
+    save_projections,
+)
 
 app = sly.Application()
+server = app.get_server()
 
-# This will enable Advanced Debugging mode only in development mode.
-# Do not need to remove it in production.
-sly.app.development.enable_advanced_debug()
+if sly.is_development():
+    # This will enable Advanced Debugging mode only in development mode.
+    # Do not need to remove it in production.
+    sly.app.development.enable_advanced_debug()
 
 
 @app.event(Event.Embeddings, use_state=True)
 @timeit
 async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
-    # Examples of requests:
-    # 1. Calculate embeddings for all images in the project.
-    # data = {"project_id": <your-project-id>, "team_id": <your-team-id>}
-    # 2. Calculate embeddings for specific images.
-    # data = {"image_ids": [<image-id-1>, <image-id-2>, ...], "team_id": <your-team-id>}
-    # api.task.send_request(task_id, "embeddings", data, skip_response=True)
-
+    """
+    Examples of requests:
+    1. Calculate embeddings for all images in the project.
+    data = {"project_id": <your-project-id>, "team_id": <your-team-id>}
+    2. Calculate embeddings for specific images.
+    data = {"image_ids": [<image-id-1>, <image-id-2>, ...], "team_id": <your-team-id>}
+    api.task.send_request(task_id, "embeddings", data, skip_response=True)
+    """
     sly.logger.info(
-        f"Started creating embeddings for project {event.project_id}. "
-        f"Force: {event.force}, Image IDs: {event.image_ids}."
+        "Started creating embeddings for project %s. Force: %s, Image IDs: %s.",
+        event.project_id,
+        event.force,
+        event.image_ids,
     )
 
     if event.force:
         # Step 1: If force is True, delete the collection and recreate it.
-        sly.logger.debug(f"Force enabled, deleting collection {event.project_id}.")
+        sly.logger.debug("Force enabled, deleting collection %s.", event.project_id)
         await qdrant.delete_collection(event.project_id)
 
     # Step 2: Ensure collection exists in Qdrant.
     await qdrant.get_or_create_collection(event.project_id)
 
     # Step 3: Process images.
-    if not event.image_ids:
-        # Step 3A: If image_ids are not provided, get all datasets from the project.
-        # Then iterate over datasets and process images from each dataset.
-        datasets = await get_datasets(api, event.project_id)
-        for dataset in datasets:
-            await process_images(api, event.project_id, dataset_id=dataset.id)
-    else:
-        # Step 3B: If image_ids are provided, process images with specific IDs.
-        await process_images(api, event.project_id, image_ids=event.image_ids)
+    image_infos = await process_images(api, event.project_id, image_ids=event.image_ids)
 
-    sly.logger.debug(f"Embeddings for project {event.project_id} have been created.")
+    if event.image_ids is None and len(image_infos) > 0:
+        # Step 4: Update custom data.
+        project_info = await get_project_info(api, event.project_id)
+        custom_data = project_info.custom_data or {}
+        custom_data["embeddings_updated_at"] = project_info.updated_at
+        await update_custom_data(api, event.project_id, custom_data)
+
+    sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
+    if event.image_ids:
+        image_infos, vectors = await qdrant.get_items_by_ids(
+            event.project_id, event.image_ids, with_vectors=True
+        )
+    else:
+        image_infos, vectors = await qdrant.get_items(event.project_id)
+    sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
+
+    return [info.to_json for info in image_infos], vectors
 
 
 @app.event(Event.Search, use_state=True)
 @timeit
-async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
+async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # Examples of requests:
     # 1. Search for similar images using text prompt.
     # data = {"project_id": <your-project-id>, "limit": <limit>, "prompt": <text-prompt>}
@@ -62,10 +102,15 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
     # data = {"project_id": <your-project-id>, "limit": <limit>, "image_ids": [<image-id-1>, <image-id-2>, ...]}
     # 3. Both text prompt and image IDs can be provided at the same time.
     # response =api.task.send_request(task_id, "search", data) # Do not skip response.
+    # returns a list of ImageInfoLite objects for each query.
+    # response: List[List[Dict]]
 
     sly.logger.info(
-        f"Searching for similar images in project {event.project_id}, limit: {event.limit}. "
-        f"Text prompt: {event.prompt}, Image IDs: {event.image_ids}."
+        "Searching for similar images in project %s, limit: %s. Text prompt: %s, Image IDs: %s.",
+        event.project_id,
+        event.limit,
+        event.prompt,
+        event.image_ids,
     )
 
     text_prompts = []
@@ -76,34 +121,51 @@ async def search(api: sly.Api, event: Event.Search) -> List[ImageInfoLite]:
             # If prompt is a comma-separated string, split it into a list.
             text_prompts = event.prompt.split(",")
 
-    sly.logger.debug(f"Formatted text prompts: {text_prompts}")
+    sly.logger.debug("Formatted text prompts: %s", text_prompts)
 
     # If request contains image IDs, get image URLs to add to the query.
     image_infos = []
     if event.image_ids:
         image_infos = await get_image_infos(
-            api, g.IMAGE_SIZE_FOR_CAS, image_ids=event.image_ids
+            api,
+            cas_size=g.IMAGE_SIZE_FOR_CAS,
+            project_id=event.project_id,
+            image_ids=event.image_ids,
         )
         sly.logger.debug(
-            f"Request contains image IDs, obtained {len(image_infos)} image infos. "
-            "Will use their URLs for the query."
+            "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",
+            len(image_infos),
         )
     image_urls = [image_info.cas_url for image_info in image_infos]
 
     # Combine text prompts and image URLs to create a query.
-    query = text_prompts + image_urls
-    sly.logger.info(f"Final query: {query}")
+    queries = text_prompts + image_urls
+    sly.logger.info("Final query: %s", queries)
 
     # Vectorize the query data (can be a text prompt or an image URL).
-    query_vectors = await cas.get_vectors(query)
+    query_vectors = await cas.get_vectors(queries)
     sly.logger.debug(
-        f"The query has been vectorized and will be used for search. Number of vectors: {len(query_vectors)}."
+        "The query has been vectorized and will be used for search. Number of vectors: %d.",
+        len(query_vectors),
     )
 
-    image_infos = await qdrant.search(event.project_id, query_vectors[0], event.limit)
-    sly.logger.debug(f"Found {len(image_infos)} similar images.")
+    result = []
+    tasks = []
 
-    return image_infos
+    async def _search_task(project_id, vector, limit, query):
+        return (await qdrant.search(project_id, vector, limit), query)
+
+    for vector, query in zip(query_vectors, queries):
+        tasks.append(
+            asyncio.create_task(_search_task(event.project_id, vector, event.limit, query))
+        )
+
+    for task in asyncio.as_completed(tasks):
+        infos, query = await task
+        result.append([info.to_json() for info in infos])
+        sly.logger.debug("Found %d similar images for a query %s", len(infos), query)
+
+    return result
 
 
 @app.event(Event.Diverse, use_state=True)
@@ -112,76 +174,163 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     # Examples of requests:
     # 1. Generate diverse population using KMeans method.
     # data = {"project_id": <your-project-id>, "limit": <limit>, "method": "kmeans"}
-    # response = api.task.send_request(task_id, "diverse", data) # Do not skip response.
     sly.logger.info(
-        f"Generating diverse population for project {event.project_id}. "
-        f"Method: {event.method}, Limit: {event.limit}."
-    )
-
-    image_infos = await qdrant.diverse(
+        "Generating diverse population for project %s. Method: %s, Limit: %s.",
         event.project_id,
-        event.limit,
         event.method,
+        event.sample_size,
     )
-    sly.logger.debug(f"Generated {len(image_infos)} diverse images.")
+    if event.image_ids:
+        image_infos, vectors = await qdrant.get_items_by_ids(
+            event.project_id, event.image_ids, with_vectors=True
+        )
+    else:
+        image_infos, vectors = await qdrant.get_items(event.project_id)
 
-    return image_infos
+    data = {
+        "vectors": vectors,
+        "sample_size": event.sample_size,
+        "method": event.method,
+    }
+    samples = await send_request(
+        api, task_id=g.projections_service_task_id, method="diverse", data=data
+    )
+    result = []
+    sly.logger.debug("Generated diverse samples: %s", samples)
+    for label, sample in samples.items():
+        result.extend([image_infos[i].to_json() for i in sample])
+
+    sly.logger.debug("Generated %d diverse images.", len(result))
+
+    return result
 
 
+@app.event(Event.Projections, use_state=True)
 @timeit
-async def process_images(
-    api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
-) -> None:
-    """Process images from the specified project. Download images, save them to HDF5,
-    get vectors from the images and upsert them to Qdrant.
-    Either dataset_id or image_ids should be provided. If the dataset_id is provided,
-    all images from the dataset will be processed. If the image_ids are provided,
-    only images with the specified IDs will be processed.
+async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
+    project_info = await get_project_info(api, event.project_id)
+    pcd_info = None
+    try:
+        pcd_info: sly.api.pointcloud_api.PointcloudInfo = await get_pcd_info(
+            api, event.project_id, project_info=project_info
+        )
+    except ValueError as e:
+        sly.logger.debug("Projections not found. Creating new projections.")
+    else:
+        if parse_timestamp(pcd_info.updated_at) < parse_timestamp(project_info.updated_at):
+            sly.logger.debug("Projections are not up to date. Creating new projections.")
+            pcd_info = None
 
-    :param api: Supervisely API object.
-    :type api: sly.Api
-    :param project_id: Project ID to process images from.
-    :type project_id: int
-    :param dataset_id: Dataset ID to process images from.
-    :type dataset_id: int, optional
-    :param image_ids: List of image IDs to process.
-    :type image_ids: List[int], optional
-    """
-    # Get image infos from the project.
-    image_infos = await get_image_infos(
+    if pcd_info is None:
+        # update embeddings
+        await update_embeddings(
+            api,
+            event.project_id,
+            force=False,
+            project_info=project_info,
+        )
+
+        # create new projections
+        image_infos, projections = await create_projections(
+            api, event.project_id, image_ids=event.image_ids
+        )
+        # save projections
+        await save_projections(
+            api,
+            project_id=event.project_id,
+            image_infos=image_infos,
+            projections=projections,
+            project_info=project_info,
+        )
+    else:
+        image_infos, projections = await get_projections(
+            api, event.project_id, project_info=project_info, pcd_info=pcd_info
+        )
+    indexes = []
+    for i, info in enumerate(image_infos):
+        if event.image_ids is None or info.id in event.image_ids:
+            indexes.append(i)
+    sly.logger.debug("Returning %d projections.", len(indexes))
+    return [[image_infos[i].to_json() for i in indexes], [projections[i] for i in indexes]]
+
+
+@app.event(Event.Clusters, use_state=True)
+async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
+    if event.image_ids:
+        image_infos, vectors = await qdrant.get_items_by_ids(
+            event.project_id, event.image_ids, with_vectors=True
+        )
+    else:
+        image_infos, vectors = await qdrant.get_items(event.project_id)
+    data = {"vectors": vectors, "reduce": True}
+    if event.reduction_dimensions:
+        data["reduction_dimensions"] = event.reduction_dimensions
+    labels = await send_request(
         api,
-        g.IMAGE_SIZE_FOR_CAS,
-        dataset_id=dataset_id,
-        image_ids=image_ids,
+        g.projections_service_task_id,
+        "clusters",
+        data=data,
+        timeout=60 * 5,
+        retries=3,
+        raise_error=True,
     )
-
-    # Get diff of image infos, check if they are already
-    # in the Qdrant collection and have the same updated_at field.
-    qdrant_diff = await qdrant.get_diff(project_id, image_infos)
-
-    await image_infos_to_db(project_id, qdrant_diff)
-
-
-@timeit
-async def image_infos_to_db(project_id: int, image_infos: List[ImageInfoLite]) -> None:
-    """Save image infos to the database.
-
-    :param image_infos: List of image infos to save.
-    :type image_infos: List[ImageInfoLite]
-    """
-    sly.logger.debug(f"Upserting {len(image_infos)} vectors to Qdrant.")
-    for image_batch in sly.batched(image_infos):
-        # Get vectors from images.
-        vectors_batch = await cas.get_vectors(
-            [image_info.cas_url for image_info in image_batch]
+    if event.save:
+        project_info = await get_project_info(api, event.project_id)
+        image_infos, vectors = await get_projections(
+            api, event.project_id, project_info=project_info
+        )
+        image_infos, vectors = zip(
+            *[
+                (image_info, vector)
+                for image_info, vector in zip(image_infos, vectors)
+                if event.image_ids is None or image_info.id in event.image_ids
+            ]
+        )
+        dataset = await get_or_create_projections_dataset(
+            api, event.project_id, image_project_info=project_info
         )
 
-        sly.logger.debug(f"Received {len(vectors_batch)} vectors.")
-
-        # Upsert vectors to Qdrant.
-        await qdrant.upsert(
-            project_id,
-            vectors_batch,
-            image_batch,
+        palette = get_predefined_colors((len(labels)))
+        colors = [palette[(label + 1) % len(palette)] for label in labels]
+        await upload_pcd(
+            api,
+            vectors,
+            [info.id for info in image_infos],
+            f"clusters_{datetime.datetime.now()}.pcd",
+            dataset.id,
+            cluster_ids=labels,
+            colors=colors,
         )
-    sly.logger.debug(f"Upserted {len(image_infos)} vectors to Qdrant.")
+
+    return [info.to_json() for info in image_infos], labels
+
+
+@server.post("/embeddings_up_to_date")
+async def embeddings_up_to_date_endpoint(request: Request):
+    state = request.state.state
+    project_id = state["project_id"]
+    return await embeddings_up_to_date(g.api, project_id)
+
+
+@server.post("/projections_up_to_date")
+async def projections_up_to_date_endpoint(request: Request):
+    state = request.state.state
+    project_id = state["project_id"]
+    return await projections_up_to_date(g.api, project_id)
+
+
+scheduler = AsyncIOScheduler()
+scheduler.add_job(
+    run_safe,
+    args=[auto_update_all_embeddings],
+    trigger="interval",
+    minutes=g.UPDATE_EMBEDDINGS_INTERVAL,
+)
+
+
+@server.on_event("startup")
+def on_startup():
+    scheduler.start()
+
+
+app.call_before_shutdown(scheduler.shutdown)

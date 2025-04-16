@@ -27,4 +27,18 @@
       v-model="state.casHost"
     ></el-input>
   </div>
+  <div
+    class="fflex align-start"
+    style="flex-direction: column; margin: 0 0 20px 0"
+  >
+    <sly-field
+      title="Projections service task ID"
+      description="Enter task ID of the Projections Service."
+    >
+    </sly-field>
+    <el-input
+      placeholder="E.g. 192.168.1.1:51000"
+      v-model="state.projections_service_task_id"
+    ></el-input>
+  </div>
 </div>
