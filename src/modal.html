@@ -1,44 +1,44 @@
 <div v-if="context.slySelectedContext !== 'files_file'">
-  <div
-    class="fflex align-start"
-    style="flex-direction: column; margin: 0 0 20px 0"
-  >
-    <sly-field
-      title="Qdrant host"
-      description="Enter host of the Qdrant database including port and without protocol."
-    >
-    </sly-field>
-    <el-input
-      placeholder="E.g. 192.168.1.1:6333"
-      v-model="state.qdrantHost"
-    ></el-input>
-  </div>
-  <div
-    class="fflex align-start"
-    style="flex-direction: column; margin: 0 0 20px 0"
-  >
-    <sly-field
-      title="CAS host"
-      description="Enter host of the Clip as Service including port and without protocol."
-    >
-    </sly-field>
-    <el-input
-      placeholder="E.g. 192.168.1.1:51000"
-      v-model="state.casHost"
-    ></el-input>
-  </div>
-  <div
-    class="fflex align-start"
-    style="flex-direction: column; margin: 0 0 20px 0"
-  >
-    <sly-field
-      title="Projections service task ID"
-      description="Enter task ID of the Projections Service."
-    >
-    </sly-field>
-    <el-input
-      placeholder="E.g. 192.168.1.1:51000"
-      v-model="state.projections_service_task_id"
-    ></el-input>
-  </div>
+	<div
+		class="fflex align-start"
+		style="flex-direction: column; margin: 0 0 20px 0"
+	>
+		<sly-field
+			title="Qdrant host"
+			description="Enter host of the Qdrant database including port."
+		>
+		</sly-field>
+		<el-input
+			placeholder="E.g. https://192.168.1.1:6333"
+			v-model="state.qdrantHost"
+		></el-input>
+	</div>
+	<div
+		class="fflex align-start"
+		style="flex-direction: column; margin: 0 0 20px 0"
+	>
+		<sly-field
+			title="CLIP Service host"
+			description="Enter host of the Clip as Service including port."
+		>
+		</sly-field>
+		<el-input
+			placeholder="E.g. https://192.168.1.1:51000"
+			v-model="state.casHost"
+		></el-input>
+	</div>
+	<div
+		class="fflex align-start"
+		style="flex-direction: column; margin: 0 0 20px 0"
+	>
+		<sly-field
+			title="Projections Service host"
+			description="Enter host of the Projections Service including port."
+		>
+		</sly-field>
+		<el-input
+			placeholder="E.g. https://192.168.1.1:51000"
+			v-model="state.projections_service_task_id"
+		></el-input>
+	</div>
 </div>

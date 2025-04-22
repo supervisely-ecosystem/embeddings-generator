@@ -3,7 +3,7 @@
     "configurations": [
         {
             "name": "UI App",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
             "args": [
@@ -25,7 +25,7 @@
         },
         {
             "name": "test App",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
             "args": [

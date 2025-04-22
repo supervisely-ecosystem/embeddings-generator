@@ -123,6 +123,8 @@ class CasUrlClient(CasClient):
         :return: List of vectors.
         :rtype: List[np.ndarray]
         """
+        for query in queries:
+            logger.info(f"Get vectors query: {query}")
         vectors = await self.client.aencode(queries)
         return vectors.tolist()
 
