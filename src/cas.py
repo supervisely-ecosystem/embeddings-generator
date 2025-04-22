@@ -1,5 +1,8 @@
+import os
 import time
+import warnings
 from typing import List
+from urllib.parse import urlparse
 
 import numpy as np
 import supervisely as sly
@@ -8,6 +11,52 @@ from supervisely.sly_logger import logger
 
 import src.globals as g
 from src.utils import send_request, timeit, with_retries
+
+
+class SlyClient(Client):
+    def __init__(self, server: str, credential: dict = {}, **kwargs):
+        """Create a Clip client object that connects to the Clip server.
+        Server scheme is in the format of ``scheme://netloc:port``, where
+            - scheme: one of grpc, websocket, http, grpcs, websockets, https
+            - netloc: the server ip address or hostname
+            - port: the public port of the server
+        :param server: the server URI
+        :param credential: the credential for authentication ``{'Authentication': '<token>'}``
+        """
+        try:
+            r = urlparse(server)
+            _port = r.port
+            self._scheme = r.scheme
+        except:
+            raise ValueError(f"{server} is not a valid scheme")
+
+        _tls = False
+        if self._scheme in ("grpcs", "https", "wss"):
+            self._scheme = self._scheme[:-1]
+            _tls = True
+
+        if self._scheme == "ws":
+            self._scheme = "websocket"  # temp fix for the core
+            if credential:
+                warnings.warn("Credential is not supported for websocket, please use grpc or http")
+
+        if self._scheme in ("grpc", "http", "websocket"):
+            if self._scheme == "http":
+                if r.path.startswith("/net/") and _port is None:
+                    _kwargs = dict(
+                        host=r.hostname + r.path, port=_port, protocol=self._scheme, tls=_tls
+                    )
+            else:
+                _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
+
+            from jina import Client
+
+            self._client = Client(**_kwargs)
+            self._async_client = Client(**_kwargs, asyncio=True)
+        else:
+            raise ValueError(f"{server} is not a valid scheme")
+
+        self._authorization = credential.get("Authorization", os.environ.get("CLIP_AUTH_TOKEN"))
 
 
 class CasClient:
@@ -37,7 +86,7 @@ class CasUrlClient(CasClient):
 
     def __init__(self, url: str):
         self.url = url
-        self.client = Client(url)
+        self.client = SlyClient(url)
         self.__wait_for_start()
 
     def __wait_for_start(self):
