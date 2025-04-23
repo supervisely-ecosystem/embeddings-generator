@@ -181,7 +181,11 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
 
     if pcd_info is None:
         # create new projections
-        image_infos, projections = await create_projections(api, project_id, image_ids=image_ids)
+        image_infos, projections = await create_projections(
+            api,
+            project_id,
+            # image_ids=image_ids, #! fixme
+        )
         # save projections
         await save_projections(
             api,

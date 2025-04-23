@@ -27,6 +27,10 @@ class SlyClient(Client):
             r = urlparse(server)
             _port = r.port
             self._scheme = r.scheme
+            if self._scheme == "https":
+                _new_port = 443
+            elif self._scheme == "http":
+                _new_port = 80
         except:
             raise ValueError(f"{server} is not a valid scheme")
 
@@ -43,9 +47,7 @@ class SlyClient(Client):
         if self._scheme in ("grpc", "http", "websocket"):
             if self._scheme == "http":
                 if r.path.startswith("/net/") and _port is None:
-                    _kwargs = dict(
-                        host=r.hostname + r.path, port=_port, protocol=self._scheme, tls=_tls
-                    )
+                    _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
             else:
                 _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
 
@@ -53,6 +55,8 @@ class SlyClient(Client):
 
             self._client = Client(**_kwargs)
             self._async_client = Client(**_kwargs, asyncio=True)
+            self._client.args.port = str(_new_port) + r.path
+            self._async_client.args.port = str(_new_port) + r.path
         else:
             raise ValueError(f"{server} is not a valid scheme")
 
@@ -123,8 +127,6 @@ class CasUrlClient(CasClient):
         :return: List of vectors.
         :rtype: List[np.ndarray]
         """
-        for query in queries:
-            logger.info(f"Get vectors query: {query}")
         vectors = await self.client.aencode(queries)
         return vectors.tolist()
 
