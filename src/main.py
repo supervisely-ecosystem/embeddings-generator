@@ -164,8 +164,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         infos, query = await task
         result.append([info.to_json() for info in infos])
         sly.logger.debug("Found %d similar images for a query %s", len(infos), query)
-
-    return result
+    merged_results = []
+    for res in result:
+        if len(res) > 0:
+            merged_results.extend(res)
+    result = list({frozenset(d.items()): d for d in merged_results}.values())
+    return result[: min(event.limit, len(result))]
 
 
 @app.event(Event.Diverse, use_state=True)

@@ -25,6 +25,12 @@ projections_service_task_id = os.getenv("modal.state.projections_service_task_id
 )
 try:
     cas_host = int(cas_host)
+    task_info = api.task.get_info_by_id(cas_host)
+    try:
+        cas_host = api.server_address + task_info["settings"]["message"]["appInfo"]["baseUrl"]
+    except KeyError:
+        sly.logger.warning("Cannot get CAS URL from task settings")
+        raise RuntimeError("Cannot connect to CLIP Service")
 except ValueError:
     if cas_host[:4] not in ["http", "ws:/", "grpc"]:
         cas_host = "grpc://" + cas_host
