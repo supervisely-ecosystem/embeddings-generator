@@ -102,7 +102,7 @@ async def update_embeddings(
     emb_updated_at = custom_data.get("embeddings_updated_at", None)
     if emb_updated_at is None or force:
         image_infos = await process_images(api, project_id)
-    elif parse_timestamp(emb_updated_at) < project_info.updated_at:
+    elif parse_timestamp(emb_updated_at) < parse_timestamp(project_info.updated_at):
         # Get all datasets that were updated after the embeddings were updated.
         dataset_infos = await get_datasets(api, project_id, recursive=True)
         dataset_infos = [

@@ -1,12 +1,13 @@
 import os
 import time
 import warnings
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import numpy as np
 import supervisely as sly
 from clip_client import Client
+from docarray.array.document import DocumentArray
 from supervisely.sly_logger import logger
 
 import src.globals as g
@@ -61,6 +62,12 @@ class SlyClient(Client):
             raise ValueError(f"{server} is not a valid scheme")
 
         self._authorization = credential.get("Authorization", os.environ.get("CLIP_AUTH_TOKEN"))
+
+    @staticmethod
+    def _gather_result(response, results: "DocumentArray", attribute: Optional[str] = None):
+        r = response.docs
+        if attribute:
+            results[r[:, "id"]][:, attribute] = r[:, attribute]
 
 
 class CasClient:
