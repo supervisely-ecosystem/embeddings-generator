@@ -23,7 +23,7 @@ cas_host = os.getenv("modal.state.casHost") or os.getenv("CAS_HOST")
 projections_service_task_id = os.getenv("modal.state.projections_service_task_id") or os.getenv(
     "PROJECTIONS_SERVICE_TASK_ID"
 )
-update_interval = os.getenv("modal.state.update_interval") or os.getenv("UPDATE_INTERVAL")
+update_interval = int(os.getenv("modal.state.update_interval") or os.getenv("UPDATE_INTERVAL"))
 try:
     cas_host = int(cas_host)
     task_info = api.task.get_info_by_id(cas_host)
