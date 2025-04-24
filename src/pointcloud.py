@@ -11,6 +11,28 @@ from src.utils import timeit, to_thread
 
 
 class EmbeddingsVisPCD:
+    """
+    EmbeddingsVisPCD - A specialized point cloud class for visualizing embeddings.
+    This class extends the conventional PCD (Point Cloud Data) format with additional fields
+    for visualization and analysis of embeddings in 3D space.
+
+    Unlike regular PCD, EmbeddingsVisPCD supports:
+    - Color information in various formats (RGB, hex, uint32)
+    - Reference IDs for source images, objects, and clusters
+    - Atlas-related information for texture mapping
+    - Automatic field type handling and validation
+    The class provides an intuitive API for creating, manipulating, and saving point clouds
+    with these extended attributes, making it particularly useful for visualizing embedding
+    spaces, clustering results, and object relationships in 3D.
+
+    Key differences from standard PCD:
+    1. Built-in support for color conversion between different formats
+    2. Metadata fields for tracking point origins and relationships
+    3. Field validation and type checking
+    4. Named field access through properties
+    5. Simplified saving and loading with automatic field handling
+    """
+
     _default_fields = ["x", "y", "z"]
     _default_fields_types = [np.float32, np.float32, np.float32]
     _extra_fields = ["rgb", "imageId", "objectId", "clusterId", "atlasId", "atlasIndex"]

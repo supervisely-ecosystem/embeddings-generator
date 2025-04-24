@@ -31,7 +31,7 @@ from src.visualization import (
     get_pcd_info,
     get_projections,
     get_projections_pcd_name,
-    projections_up_to_date,
+    is_projections_up_to_date,
     save_projections,
 )
 
@@ -149,7 +149,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         len(query_vectors),
     )
 
-    result = []
+    results = []
     tasks = []
 
     async def _search_task(project_id, vector, limit, query):
@@ -161,23 +161,36 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         )
 
     for task in asyncio.as_completed(tasks):
-        infos, query = await task
-        result.append([info.to_json() for info in infos])
+        search_results, query = await task
+
+        infos = [info.to_json() for info in search_results[qdrant.SearchResultField.ITEMS]]
+        if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
+            for i, score in enumerate(search_results[qdrant.SearchResultField.SCORES]):
+                infos[i]["score"] = score
+        else:
+            for i in range(len(infos)):
+                infos[i]["score"] = None
+        results.append(infos)
         sly.logger.debug("Found %d similar images for a query %s", len(infos), query)
-    merged_results = []
-    for res in result:
-        if len(res) > 0:
-            merged_results.extend(res)
-    result = list({frozenset(d.items()): d for d in merged_results}.values())
-    return result[: min(event.limit, len(result))]
+    return results
 
 
 @app.event(Event.Diverse, use_state=True)
 @timeit
 async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
+    """
+    Generates a representative subset of images from a project by leveraging CLIP embeddings and clustering techniques.
+    It works by retrieving image vectors from Qdrant, sending them to a projections service that applies clustering algorithms (like KMeans),
+    and then returning a selection of images that maximally represent the visual diversity of the entire collection.
+    This approach is particularly valuable for creating balanced training datasets, getting a quick overview of content variety,
+    and identifying outliers without having to manually review the entire image collection.
+
     # Examples of requests:
     # 1. Generate diverse population using KMeans method.
     # data = {"project_id": <your-project-id>, "limit": <limit>, "method": "kmeans"}
+
+    """
+
     sly.logger.info(
         "Generating diverse population for project %s. Method: %s, Limit: %s.",
         event.project_id,
@@ -320,7 +333,7 @@ async def embeddings_up_to_date_endpoint(request: Request):
 async def projections_up_to_date_endpoint(request: Request):
     state = request.state.state
     project_id = state["project_id"]
-    return await projections_up_to_date(g.api, project_id)
+    return await is_projections_up_to_date(g.api, project_id)
 
 
 scheduler = AsyncIOScheduler()

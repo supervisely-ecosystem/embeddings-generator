@@ -19,6 +19,12 @@ except Exception as e:
     sly.logger.error("Failed to connect to Qdrant at %s with error: %s", g.qdrant_host, e)
 
 
+class SearchResultField:
+    ITEMS = "items"
+    VECTORS = "vectors"
+    SCORES = "scores"
+
+
 @with_retries()
 async def delete_collection(collection_name: str) -> None:
     """Delete a collection with the specified name.
@@ -246,7 +252,8 @@ async def search(
     query_vector: np.ndarray,
     limit: int,
     return_vectors: bool = False,
-) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
+    return_scores: bool = True,
+) -> Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]:
     """Search for similar items in the collection based on the query vector.
     If return_vectors is True, returns vectors along with ImageInfoLite objects.
     NOTE: Do not set return_vectors to True unless necessary, since it will slow down the process
@@ -260,8 +267,10 @@ async def search(
     :type limit: int
     :param return_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type return_vectors: bool, optional
-    :return: A list of ImageInfoLite objects and vectors if return_vectors is True.
-    :rtype: Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]
+    :param return_scores: Whether to return scores along with ImageInfoLite objects, defaults to True.
+    :type return_scores: bool, optional
+    :return: A dictionary with keys "items", "vectors" and "scores".
+    :rtype: Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]
     """
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
@@ -272,11 +281,15 @@ async def search(
         with_payload=True,
         with_vectors=return_vectors,
     )
-    image_infos = [ImageInfoLite(point.id, **point.payload) for point in points]
+    result = {"items": [ImageInfoLite(point.id, **point.payload) for point in points]}
+
     if return_vectors:
-        vectors = [point.vector for point in points]
-        return image_infos, vectors
-    return image_infos
+        result["vectors"] = [point.vector for point in points]
+
+    if return_scores:
+        result["scores"] = [point.score for point in points]
+
+    return result
 
 
 @with_retries()

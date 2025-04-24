@@ -31,7 +31,7 @@ def projections_path(project_id):
 
 
 def projections_project_name():
-    return "Embeddings projections"
+    return "Embeddings Projections"
 
 
 def projections_dataset_name(project_id):
@@ -74,6 +74,7 @@ async def save_projections(
     project_info: Optional[sly.ProjectInfo] = None,
     cluster_labels: List[int] = None,
 ):
+    """Saves projections to a PCD file and uploads it to the point cloud project."""
     if project_info is None:
         project_info = await get_project_info(api, project_id)
     pcd_dataset_info = await get_or_create_projections_dataset(
@@ -95,6 +96,10 @@ async def save_projections(
 async def get_pcd_info(
     api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
 ) -> sly.api.pointcloud_api.PointcloudInfo:
+    """
+    Retrieves point cloud information for projections associated with a specific project.
+    Validates the existence of project, dataset, and point cloud for projections.
+    """
     if project_info is None:
         project_info = await get_project_info(api, project_id)
     pcd_project_info = await get_project_info_by_name(
@@ -124,6 +129,12 @@ async def get_projections(
     project_info: Optional[sly.ProjectInfo] = None,
     pcd_info: Optional[sly.api.pointcloud_api.PointcloudInfo] = None,
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
+    """
+    Retrieves the 2D projections of image embeddings from a point cloud file.
+    This function downloads a point cloud file associated with a project, extracts the 2D projection
+    vectors (first two dimensions of the point cloud points) and returns them along with the corresponding
+    image information.
+    """
     if pcd_info is None:
         if project_info is None:
             project_info = await get_project_info(api, project_id)
@@ -141,6 +152,13 @@ async def get_projections(
 async def get_or_create_projections_dataset(
     api: sly.Api, image_project_id: int, image_project_info: sly.ProjectInfo = None
 ) -> sly.DatasetInfo:
+    """
+    Gets or creates a dataset for projections based on an image project.
+
+    This function checks if a dataset exists for storing projections associated with the specified image project.
+    If it exists, it returns the dataset info; if not, it creates a new dataset and returns its info.
+    The dataset is created within a point clouds project that is either retrieved or created if not exists.
+    """
     if image_project_info is None:
         image_project_info = await get_project_info(api, image_project_id)
     workspace_id = image_project_info.workspace_id
@@ -151,11 +169,16 @@ async def get_or_create_projections_dataset(
     return dataset_info
 
 
-async def projections_up_to_date(
+async def is_projections_up_to_date(
     api: sly.Api,
     project_id: int,
     project_info: Optional[sly.ProjectInfo] = None,
 ) -> bool:
+    """
+    Checks if the projections (embeddings visualization) are up to date with the current project state.
+    Compares the timestamp of the last update of the point cloud data with the timestamp of the last
+    project update to determine if the projections need to be recalculated.
+    """
     try:
         pcd_info = await get_pcd_info(api, project_id)
     except ValueError:
@@ -166,6 +189,13 @@ async def projections_up_to_date(
 
 
 async def get_or_create_projections(api: sly.Api, project_id, project_info):
+    """
+    Retrieves existing projections for a project or creates new ones if needed.
+
+    This function checks if projections exist for the given project and are up to date.
+    If projections don't exist or are outdated (project was updated after projections
+    were created), new projections will be generated.
+    """
     if project_info is None:
         project_info = api.project.get_info_by_id(project_id)
     try:

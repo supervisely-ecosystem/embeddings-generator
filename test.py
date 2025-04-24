@@ -179,7 +179,7 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
         radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
     )
     bokeh.add_plots([plot, new_plot])
-    bokeh._load_chart()
+    # bokeh._load_chart()
     bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
     bokeh_iframe.loading = False
 
@@ -236,7 +236,7 @@ def draw_clusters(project_id):
     gallery.clean_up()
     bokeh.clear()
     bokeh.add_plots(plots)
-    bokeh._load_chart()
+    # bokeh._load_chart()
     bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
     bokeh_iframe.loading = False
     gallery._update()
@@ -277,7 +277,7 @@ def draw_diverse(project_id, sample_size):
         radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
     )
     bokeh.add_plots([plot, new_plot])
-    bokeh._load_chart()
+    # bokeh._load_chart()
     bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
     bokeh_iframe.loading = False
 

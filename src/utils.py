@@ -10,7 +10,7 @@ from time import perf_counter
 from typing import Callable, Dict, List, Optional
 
 import supervisely as sly
-from supervisely._utils import resize_image_url
+from supervisely._utils import batched, resize_image_url
 from supervisely.api.module_api import ApiField
 
 
@@ -443,37 +443,71 @@ async def image_get_list_async(
     per_page: int = 500,
 ):
     method = "images.list"
-    data = {
+    base_data = {
         ApiField.PROJECT_ID: project_id,
         ApiField.FORCE_METADATA_FOR_LINKS: False,
         ApiField.PER_PAGE: per_page,
     }
     if dataset_id is not None:
-        data[ApiField.DATASET_ID] = dataset_id
-    if images_ids is not None:
-        data[ApiField.FILTERS] = [{"field": ApiField.ID, "operator": "in", "value": images_ids}]
+        base_data[ApiField.DATASET_ID] = dataset_id
+
     semaphore = api.get_default_semaphore()
-    pages_count = None
-    tasks: List[asyncio.Task] = []
+    all_items = []
+    tasks = []
 
-    async def _r(data_):
-        nonlocal pages_count
+    async def _get_all_pages(batch_filters):
+        page_data = base_data.copy()
+        if batch_filters:
+            page_data[ApiField.FILTERS] = batch_filters
+        page_data[ApiField.PAGE] = 1
+
         async with semaphore:
-            response = await api.post_async(method, data_)
+            response = await api.post_async(method, page_data)
             response_json = response.json()
-            items = response_json.get("entities", [])
+
             pages_count = response_json["pagesCount"]
-        return [api.image._convert_json_info(item) for item in items]
 
-    data[ApiField.PAGE] = 1
-    items = await _r(data)
+            batch_items = []
+            # Process first page
+            for item in response_json.get("entities", []):
+                image_info = api.image._convert_json_info(item)
+                batch_items.append(image_info)
 
-    for page_n in range(2, pages_count + 1):
-        data[ApiField.PAGE] = page_n
-        tasks.append(asyncio.create_task(_r(data.copy())))
-    for task in tasks:
-        items.extend(await task)
-    return items
+            # Get remaining pages if they exist
+            page_tasks = []
+            if pages_count > 1:
+                for page in range(2, pages_count + 1):
+                    page_data = page_data.copy()
+                    page_data[ApiField.PAGE] = page
+                    page_tasks.append(api.post_async(method, page_data))
+
+                responses = await asyncio.gather(*page_tasks)
+                for resp in responses:
+                    resp_json = resp.json()
+                    for item in resp_json.get("entities", []):
+                        image_info = api.image._convert_json_info(item)
+                        batch_items.append(image_info)
+
+            return batch_items
+
+    if images_ids is None:
+        # If no image IDs specified, get all images
+        tasks.append(asyncio.create_task(_get_all_pages([])))
+    else:
+        # Process image IDs in batches of 50
+        for batch in batched(images_ids):
+            batch_filters = [{"field": ApiField.ID, "operator": "in", "value": batch}]
+            tasks.append(asyncio.create_task(_get_all_pages(batch_filters)))
+            await asyncio.sleep(0.02)  # Small delay to avoid overwhelming the server
+
+    # Wait for all tasks to complete
+    batch_results = await asyncio.gather(*tasks)
+
+    # Combine results from all batches
+    for batch_items in batch_results:
+        all_items.extend(batch_items)
+
+    return all_items
 
 
 async def embeddings_up_to_date(
