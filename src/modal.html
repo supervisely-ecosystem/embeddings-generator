@@ -41,4 +41,20 @@
 			v-model="state.projections_service_task_id"
 		></el-input>
 	</div>
+	<div
+		class="fflex align-start"
+		style="flex-direction: column; margin: 0 0 20px 0"
+	>
+		<sly-field
+			title="Update Interval"
+			description="Enter the interval in minutes for updating embeddings for selected projects."
+		>
+		</sly-field>
+		<el-input-number
+			value="10"
+			:min="1"
+			:max="1440"
+			v-model="state.update_interval"
+		></el-input-number>
+	</div>
 </div>
