@@ -63,11 +63,11 @@ class SlyClient(Client):
 
         self._authorization = credential.get("Authorization", os.environ.get("CLIP_AUTH_TOKEN"))
 
-    # @staticmethod
-    # def _gather_result(response, results: "DocumentArray", attribute: Optional[str] = None):
-    #     r = response.docs
-    #     if attribute:
-    #         results[r[:, "id"]][:, attribute] = r[:, attribute]
+    @staticmethod
+    def _gather_result(response, results: "DocumentArray", attribute: Optional[str] = None):
+        r = response.docs
+        if attribute:
+            results[r[:, "id"]][:, attribute] = r[:, attribute]
 
 
 class CasClient:
