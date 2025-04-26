@@ -14,7 +14,7 @@ import src.globals as g
 from src.utils import send_request, timeit, with_retries
 
 
-class SlyClient(Client):
+class SlyCasClient(Client):
     def __init__(self, server: str, credential: dict = {}, **kwargs):
         """Create a Clip client object that connects to the Clip server.
         Server scheme is in the format of ``scheme://netloc:port``, where
@@ -76,6 +76,7 @@ class CasClient:
 
 
 class CasTaskClient(CasClient):
+    #TODO This class is not used and must be refactored before to be used
     def __init__(self, api: sly.Api, task_id: int):
         self.api = api
         self.task_id = task_id
@@ -97,7 +98,7 @@ class CasUrlClient(CasClient):
 
     def __init__(self, url: str):
         self.url = url
-        self.client = SlyClient(url)
+        self.client = SlyCasClient(url)
         self.__wait_for_start()
 
     def __wait_for_start(self):
@@ -140,7 +141,9 @@ class CasUrlClient(CasClient):
 
 def _init_client() -> CasClient:
     if isinstance(g.cas_host, int):
-        return CasTaskClient(g.api, g.cas_host)
+        return CasTaskClient(
+            g.api, g.cas_host
+        )  # to switch on this mode you need to refactor processing of cas_host in globals.py
     else:
         return CasUrlClient(g.cas_host)
 

@@ -76,9 +76,9 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     if event.image_ids is None and len(image_infos) > 0:
         # Step 4: Update custom data.
         project_info = await get_project_info(api, event.project_id)
-        custom_data = project_info.custom_data or {}
-        custom_data["embeddings_updated_at"] = project_info.updated_at
-        await update_custom_data(api, event.project_id, custom_data)
+        custom_data = project_info.custom_data or {}  # TODO update when fields are added
+        custom_data["embeddings_updated_at"] = project_info.updated_at  # TODO update
+        await update_custom_data(api, event.project_id, custom_data)  # TODO update
 
     sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
     if event.image_ids:

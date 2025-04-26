@@ -305,12 +305,6 @@ def update_custom_data(api: sly.Api, project_id: int, custom_data: Dict):
 
 @to_thread
 @timeit
-def get_all_projects(api: sly.Api) -> List[sly.ProjectInfo]:
-    return api.project.get_list_all()["entities"]  # TODO: filter by custom data or flag
-
-
-@to_thread
-@timeit
 def get_file_info(api: sly.Api, team_id: int, path: str):
     return api.file.get_info_by_path(team_id, path)
 
@@ -520,3 +514,147 @@ async def embeddings_up_to_date(
     if emb_updated_at is None:
         return False
     return parse_timestamp(emb_updated_at) >= project_info.updated_at
+
+
+async def get_list_all_pages_async(
+    api: sly.Api,
+    method,
+    data,
+    convert_json_info_cb,
+    progress_cb=None,
+    limit: int = None,
+    return_first_response: bool = False,
+    semaphore: Optional[List[asyncio.Semaphore]] = None,
+):
+    """
+    Get list of all or limited quantity entities from the Supervisely server.
+    """
+    from copy import deepcopy
+
+    def _add_sort_param(data):
+        """_add_sort_param"""
+        results = deepcopy(data)
+        results[ApiField.SORT] = ApiField.ID
+        results[ApiField.SORT_ORDER] = "asc"  # @TODO: move to enum
+        return results
+
+    convert_func = convert_json_info_cb
+
+    if ApiField.SORT not in data:
+        data = _add_sort_param(data)
+
+    if semaphore is None:
+        semaphore = api.get_default_semaphore()
+
+    # Get first page to determine pagination details
+    first_page_data = {**data, "page": 1}
+    first_response = await api.post_async(method, first_page_data)
+    first_response_json = first_response.json()
+
+    total = first_response_json["total"]
+    per_page = first_response_json["perPage"]
+    pages_count = first_response_json["pagesCount"]
+
+    results = first_response_json["entities"]
+    if progress_cb is not None:
+        progress_cb(len(results))
+
+    # If only one page or limit is already exceeded with first page
+    if (pages_count == 1 and len(results) == total) or (
+        limit is not None and len(results) >= limit
+    ):
+        if limit is not None:
+            results = results[:limit]
+        if return_first_response:
+            return [convert_func(item) for item in results], first_response_json
+        return [convert_func(item) for item in results]
+
+    # Process remaining pages concurrently
+    async def fetch_page(page_num):
+        async with semaphore:
+            page_data = {**data, "page": page_num, "per_page": per_page}
+            response = await api.post_async(method, page_data)
+            response_json = response.json()
+            page_items = response_json.get("entities", [])
+            if progress_cb is not None:
+                progress_cb(len(page_items))
+            return page_items
+
+    # Create tasks for all remaining pages
+    tasks = []
+    for page_num in range(2, pages_count + 1):
+        tasks.append(asyncio.create_task(fetch_page(page_num)))
+
+    # Wait for all tasks to complete
+    for task in asyncio.as_completed(tasks):
+        page_items = await task
+        results.extend(page_items)
+        if limit is not None and len(results) >= limit:
+            break
+
+    if len(results) != total and limit is None:
+        raise RuntimeError(f"Method {method!r}: error during pagination, some items are missed")
+
+    if limit is not None:
+        results = results[:limit]
+
+    return [convert_func(item) for item in results]
+
+
+@timeit
+async def get_all_projects(
+    api: sly.Api,
+    project_ids: Optional[List[int]] = None,
+) -> List[sly.ProjectInfo]:
+    """
+    Get all projects from the Supervisely server that have a flag for automatic embeddings update.
+    """
+    method = "projects.list.all"
+    convert_json_info = api.project._convert_json_info
+    fields = [ApiField.ID, ApiField.NAME, ApiField.CUSTOM_DATA]
+    data = {ApiField.SKIP_EXPORTED: True, ApiField.FIELDS: fields}
+    tasks = []
+    if project_ids is not None:
+        for batch in batched(project_ids):
+            data[ApiField.FILTERS] = [
+                {
+                    ApiField.FIELD: ApiField.ID,
+                    ApiField.OPERATOR: "in",
+                    ApiField.VALUE: batch,
+                }
+            ]
+            tasks.append(
+                get_list_all_pages_async(
+                    api,
+                    method,
+                    data=data,
+                    convert_json_info_cb=convert_json_info,
+                    progress_cb=None,
+                    limit=None,
+                    return_first_response=False,
+                )
+            )
+    else:
+        tasks.append(
+            get_list_all_pages_async(
+                api,
+                method,
+                data=data,
+                convert_json_info_cb=convert_json_info,
+                progress_cb=None,
+                limit=None,
+                return_first_response=False,
+            )
+        )
+    results = []
+    for task in asyncio.as_completed(tasks):
+        page_items = await task
+        filtered = [
+            item
+            for item in page_items
+            if "auto_update_embeddings" in item.name #! fix later
+            # if item.custom_data is not None
+            # and item.custom_data.get("auto_update_embeddings", False)
+        ]
+        results.extend(filtered)
+    return results
