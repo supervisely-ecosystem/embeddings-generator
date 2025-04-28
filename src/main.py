@@ -14,6 +14,7 @@ from src.events import Event
 from src.functions import auto_update_all_embeddings, process_images, update_embeddings
 from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
+from src.search_cache import SearchCache
 from src.utils import (
     ImageInfoLite,
     embeddings_up_to_date,
@@ -113,6 +114,19 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         event.image_ids,
     )
 
+    cache = SearchCache(api, event.project_id)
+    settings = {"limit": event.limit, "image_ids": event.image_ids if event.image_ids else None}
+
+    # Try to get cached results first
+    prompt_str = (
+        ",".join(event.prompt) if isinstance(event.prompt, list) else str(event.prompt or "")
+    )
+    cached_results = cache.get_cached_result(prompt_str, event.project_id, settings)
+
+    if cached_results is not None:
+        sly.logger.info("Using cached search results")
+        return cached_results
+
     text_prompts = []
     if event.prompt:
         if isinstance(event.prompt, list):
@@ -172,6 +186,13 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 infos[i]["score"] = None
         results.append(infos)
         sly.logger.debug("Found %d similar images for a query %s", len(infos), query)
+    # Cache the results before returning them
+    cache.cache_result(
+        prompt=prompt_str,
+        project_id=int(event.project_id),
+        settings=settings,
+        result=results,
+    )
     return results
 
 

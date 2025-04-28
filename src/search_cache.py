@@ -19,13 +19,13 @@ class SearchCache:
 
     SYSTEM_DIR = "/system/embeddings-search-cache"
 
-    def __init__(self, api: sly.Api, team_id: int, project_id: int):
+    def __init__(self, api: sly.Api, project_id: int):
         """
         Initialize the cache.
         """
         self.api = api
         self.project_id = project_id
-        self.team_id = team_id
+        self.team_id = api.project.get_info_by_id(project_id).team_id
         self.cache_file_path = self.SYSTEM_DIR + f"/{self.project_id}.pkl"
         # Dictionary mapping request keys to tuples of (cache_time, result)
         self.cache: Dict[str, Tuple[float, Any]] = {}
@@ -134,7 +134,7 @@ class SearchCache:
                 self.team_id,
                 temp_cache.name,
                 self.cache_file_path,
-                progress=None,
+                progress_cb=None,
             )
             sly.fs.silent_remove(temp_cache.name)
         except Exception as e:
