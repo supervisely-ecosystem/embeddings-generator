@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from collections import namedtuple
+from dataclasses import dataclass
 from functools import partial, wraps
 from time import perf_counter
 from typing import Callable, Dict, List, Optional
@@ -18,6 +19,7 @@ class TupleFields:
     """Fields of the named tuples used in the project."""
 
     ID = "id"
+    HASH = "hash"
     DATASET_ID = "dataset_id"
     FULL_URL = "full_url"
     CAS_URL = "cas_url"
@@ -61,33 +63,29 @@ class EventFields:
     POINTCLOUD = "pointcloud"
 
 
-_ImageInfoLite = namedtuple(
-    "_ImageInfoLite",
-    [
-        TupleFields.ID,
-        TupleFields.DATASET_ID,
-        TupleFields.FULL_URL,
-        TupleFields.CAS_URL,
-        TupleFields.UPDATED_AT,
-    ],
-)
+@dataclass
+class ImageInfoLite:
+    id: int
+    hash: str
+    full_url: str
+    cas_url: str
+    updated_at: str  # or datetime.datetime if you parse it
 
-
-class ImageInfoLite(_ImageInfoLite):
     def to_json(self):
         return {
             TupleFields.ID: self.id,
-            TupleFields.DATASET_ID: self.dataset_id,
+            TupleFields.HASH: self.hash,
             TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.UPDATED_AT: self.updated_at,
         }
+        # Alternative: return asdict(self)  # if field names match keys
 
     @classmethod
     def from_json(cls, data):
         return cls(
             id=data[TupleFields.ID],
-            dataset_id=data[TupleFields.DATASET_ID],
+            hash=data[TupleFields.HASH],
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             updated_at=data[TupleFields.UPDATED_AT],
@@ -299,8 +297,8 @@ def get_pcd_by_name(
 
 @to_thread
 @timeit
-def update_custom_data(api: sly.Api, project_id: int, custom_data: Dict):
-    return api.project.update_custom_data(project_id, custom_data)
+def update_embeddings_data(api: sly.Api, project_id: int, timestamp: str):
+    return api.project.set_embeddings_updated_at(project_id, timestamp)
 
 
 @to_thread
@@ -310,12 +308,13 @@ def get_file_info(api: sly.Api, team_id: int, path: str):
 
 
 @timeit
-async def get_image_infos(
+async def get_lite_image_infos(
     api: sly.Api,
     cas_size: int,
     project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
+    image_infos: List[sly.ImageInfo] = None,
 ) -> List[ImageInfoLite]:
     """Returns lite version of image infos to cut off unnecessary data.
     Uses either dataset_id or image_ids to get image infos.
@@ -330,16 +329,18 @@ async def get_image_infos(
     :type dataset_id: int, optional
     :param image_ids: List of image IDs to get image infos.
     :type image_ids: List[int], optional
+    :param image_infos: List of image infos to get lite version from.
+    :type image_infos: List[sly.ImageInfo], optional
     :return: List of lite version of image infos.
     :rtype: List[ImageInfoLite]
     """
-
-    image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids)
+    if not image_infos:
+        image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids)
 
     return [
         ImageInfoLite(
             id=image_info.id,
-            dataset_id=image_info.dataset_id,
+            hash=image_info.hash,
             full_url=image_info.full_storage_url,
             cas_url=resize_image_url(
                 image_info.full_storage_url,
@@ -435,7 +436,7 @@ async def image_get_list_async(
     dataset_id: int = None,
     images_ids: List[int] = None,
     per_page: int = 500,
-):
+) -> List[sly.ImageInfo]:
     method = "images.list"
     base_data = {
         ApiField.PROJECT_ID: project_id,
@@ -649,12 +650,32 @@ async def get_all_projects(
     results = []
     for task in asyncio.as_completed(tasks):
         page_items = await task
-        filtered = [
-            item
-            for item in page_items
-            if "auto_update_embeddings" in item.name #! fix later
-            # if item.custom_data is not None
-            # and item.custom_data.get("auto_update_embeddings", False)
-        ]
+        filtered = [item for item in page_items if item.embeddings_enabled]
         results.extend(filtered)
     return results
+
+
+def update_id_by_hash(
+    source_infos: List[ImageInfoLite], target_infos: List[ImageInfoLite]
+) -> List[ImageInfoLite]:
+    """Updates the ID of the target image infos by the hash of the source image infos.
+
+    :param source_infos: Source image infos to get IDs from.
+    :type source_infos: List[ImageInfoLite]
+    :param target_infos: Target image infos to update IDs.
+    :type target_infos: List[ImageInfoLite]
+    :return: List of target image infos with updated IDs.
+    :rtype: List[ImageInfoLite]
+    """
+    hash_to_id = {info.hash: info.id for info in source_infos}
+
+    for info in target_infos:
+        if info.hash in hash_to_id:
+            info.id = hash_to_id[info.hash]
+        else:
+            sly.logger.warning(
+                "Hash %s not found in source infos. This should not happen.",
+                info.hash,
+            )
+
+    return target_infos

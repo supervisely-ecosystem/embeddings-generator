@@ -76,7 +76,7 @@ class CasClient:
 
 
 class CasTaskClient(CasClient):
-    #TODO This class is not used and must be refactored before to be used
+    # TODO This class is not used and must be refactored before to be used
     def __init__(self, api: sly.Api, task_id: int):
         self.api = api
         self.task_id = task_id

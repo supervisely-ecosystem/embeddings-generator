@@ -14,7 +14,7 @@ from src.utils import (
     ImageInfoLite,
     get_dataset_by_name,
     get_file_info,
-    get_image_infos,
+    get_lite_image_infos,
     get_or_create_dataset,
     get_or_create_project,
     get_pcd_by_name,
@@ -23,6 +23,7 @@ from src.utils import (
     parse_timestamp,
     send_request,
     timeit,
+    update_id_by_hash,
 )
 
 
@@ -47,12 +48,19 @@ async def create_projections(
     api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
     if image_ids is None:
-        image_infos = await get_image_infos(
+        image_infos = await get_lite_image_infos(
             api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, dataset_id=dataset_id
         )
-        image_ids = [info.id for info in image_infos]
+    else:
+        image_infos = await get_lite_image_infos(
+            api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, image_ids=image_ids
+        )
+    image_hashes = [info.hash for info in image_infos]
 
-    image_infos, vectors = await qdrant.get_items_by_ids(project_id, image_ids, with_vectors=True)
+    image_infos_result, vectors = await qdrant.get_items_by_hashes(
+        qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
+    )
+    image_infos_result = update_id_by_hash(image_infos, image_infos_result)
     projections = await send_request(
         api,
         g.projections_service_task_id,
@@ -62,7 +70,7 @@ async def create_projections(
         retries=3,
         raise_error=True,
     )
-    return image_infos, projections
+    return image_infos_result, projections
 
 
 @timeit
@@ -143,7 +151,7 @@ async def get_projections(
     pcd = await download_pcd(api, pcd_info.id)
     vectors = pcd.points[:, :2]
     image_ids = pcd.image_ids
-    image_infos = await get_image_infos(
+    image_infos = await get_lite_image_infos(
         api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, image_ids=image_ids
     )
     return image_infos, vectors.tolist()

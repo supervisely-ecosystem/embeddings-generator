@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import supervisely as sly
@@ -19,27 +19,54 @@ except Exception as e:
     sly.logger.error("Failed to connect to Qdrant at %s with error: %s", g.qdrant_host, e)
 
 
+IMAGES_COLLECTION = "images"
+
+
 class SearchResultField:
     ITEMS = "items"
     VECTORS = "vectors"
     SCORES = "scores"
 
 
-@with_retries()
-async def delete_collection(collection_name: str) -> None:
-    """Delete a collection with the specified name.
+import base64
+import uuid
 
-    :param collection_name: The name of the collection to delete.
+from qdrant_client.models import PointStruct
+
+
+def hash_to_uuid(image_hash: str) -> uuid.UUID:
+    """Converts a base64-encoded image hash to a UUID."""
+    raw_bytes = base64.b64decode(image_hash)
+    if len(raw_bytes) != 32:
+        raise ValueError("Expected 32-byte hash input")
+
+    selected_bytes = raw_bytes[:8] + raw_bytes[-8:]
+    return uuid.UUID(bytes=selected_bytes)
+
+
+def uuid_to_bytes(hash_uuid: uuid.UUID) -> bytes:
+    """Returns 16-byte UUID as bytes. This is a first 8 bytes and last 8 bytes of the image hash."""
+    return hash_uuid.bytes
+
+
+@with_retries()
+async def delete_collection_items(
+    item_ids: List[str], collection_name: str = IMAGES_COLLECTION
+) -> None:
+    """Delete a collection items with the specified IDs.
+    For IMAGES_COLLECTION IDs must be strings, that are image hashes.
+
+    :param item_ids: A list of item IDs to delete.
+    :type item_ids: List[str]
+    :param collection_name: The name of the collection to delete items from, defaults to IMAGES_COLLECTION.
     :type collection_name: str
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
-    sly.logger.debug("Deleting collection %s...", collection_name)
+    sly.logger.debug("Deleting items from collection %s...", item_ids)
     try:
-        await client.delete_collection(collection_name)
-        sly.logger.debug("Collection %s deleted.", collection_name)
+        await client.delete(collection_name, item_ids)
+        sly.logger.debug("Items %s deleted.", item_ids)
     except UnexpectedResponse:
-        sly.logger.debug("Collection %s wasn't found while deleting.", collection_name)
+        sly.logger.debug("Something went wrong, while deleting %s .", item_ids)
 
 
 @with_retries()
@@ -92,15 +119,15 @@ async def collection_exists(collection_name: str) -> bool:
 
 @with_retries()
 @timeit
-async def get_items_by_ids(
-    collection_name: str, image_ids: List[int], with_vectors: bool = False
+async def get_items_by_hashes(
+    collection_name: str, image_hashes: List[str], with_vectors: bool = False
 ) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
-    """Get vectors from the collection based on the specified image IDs.
+    """Get vectors from the collection based on the specified image hashes.
 
     :param collection_name: The name of the collection to get vectors from.
     :type collection_name: str
-    :param image_ids: A list of image IDs to get vectors for.
-    :type image_ids: List[int]
+    :param image_hashes: A list of image hashes to get vectors for.
+    :type image_hashes: List[int]
     :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type with_vectors: bool, optional
     :return: A list of vectors.
@@ -108,10 +135,12 @@ async def get_items_by_ids(
     """
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
+
+    point_ids = [hash_to_uuid(image_hash).hex for image_hash in image_hashes]
     points = await client.retrieve(
-        collection_name, image_ids, with_payload=True, with_vectors=with_vectors
+        collection_name, point_ids, with_payload=True, with_vectors=with_vectors
     )
-    image_infos = [ImageInfoLite(point.id, **point.payload) for point in points]
+    image_infos = [ImageInfoLite(id=None, **point.payload) for point in points]
     if with_vectors:
         vectors = [point.vector for point in points]
         return image_infos, vectors
@@ -137,17 +166,13 @@ async def upsert(
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
     payloads = get_payloads(image_infos)
-    sly.logger.debug(
-        "Upserting %d vectors to collection %s. %s", len(vectors), collection_name, vectors[0]
-    )
-    sly.logger.debug(
-        "Upserting %d payloads to collection %s. %s", len(payloads), collection_name, payloads[0]
-    )
+    sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
+    sly.logger.debug("Upserting %d payloads to collection %s.", len(payloads), collection_name)
     await client.upsert(
         collection_name,
         Batch(
             vectors=vectors,
-            ids=[image_info.id for image_info in image_infos],
+            ids=[hash_to_uuid(image_info.hash).hex for image_info in image_infos],
             payloads=payloads,
         ),
     )
@@ -179,7 +204,7 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
         collection_name = str(collection_name)
     points = await client.retrieve(
         collection_name,
-        [image_info.id for image_info in image_infos],
+        [hash_to_uuid(image_info.hash).hex for image_info in image_infos],
         with_payload=True,
     )
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
@@ -217,10 +242,10 @@ def _diff(image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]) -> Lis
     # If the point with the same id exsts - check if updated_at is exactly the same, or add to the diff.
     # Image infos and points have different length, so we need to iterate over image infos.
     diff = []
-    points_dict = {point.id: point for point in points}
+    points_dict = {point.payload.get(TupleFields.HASH): point for point in points}
 
     for image_info in image_infos:
-        point = points_dict.get(image_info.id)
+        point = points_dict.get(image_info.hash)
         if point is None or point.payload.get(TupleFields.UPDATED_AT) != image_info.updated_at:
             diff.append(image_info)
 
@@ -315,7 +340,7 @@ async def get_items(
         collection_name, limit=limit, with_payload=True, with_vectors=True
     )
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
-    return [ImageInfoLite(point.id, **point.payload) for point in points], [
+    return [ImageInfoLite(id=None, **point.payload) for point in points], [
         point.vector for point in points
     ]
 
