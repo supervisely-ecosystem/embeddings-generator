@@ -87,20 +87,20 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     image_infos = await process_images(api, event.project_id, image_infos=image_infos)
     image_hashes = [info.hash for info in image_infos]
 
-    if event.image_ids is None and len(image_infos) > 0:  #! check "event.image_ids is None"
+    if event.image_ids is None and len(image_infos) > 0:
         # Step 4: Update custom data.
         project_info = await get_project_info(api, event.project_id)
         await update_embeddings_data(api, event.project_id, project_info.updated_at)
 
     sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
-    image_infos_result, vectors = await qdrant.get_items_by_hashes(
+    _, vectors = await qdrant.get_items_by_hashes(
         qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
-    )  #! do we really need this oir just collect vectors in "process_images"?
-    image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+    )
+    # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
 
-    sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos_result), len(vectors))
+    sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
 
-    return [info.to_json for info in image_infos_result], vectors
+    return [info.to_json for info in image_infos], vectors
 
 
 @app.event(Event.Search, use_state=True)
@@ -133,14 +133,17 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     cache = SearchCache(api, event.project_id, prompt_str, settings)
 
     if cache.results is not None and cache.timestamp is not None:
-        if parse_timestamp(cache.timestamp) < parse_timestamp(cache.project_info.updated_at):
+        if parse_timestamp(cache.timestamp) < parse_timestamp(
+            cache.project_info.embeddings_updated_at
+        ):
             # If the cache is older than the project update timestamp, invalidate it.
             sly.logger.info(
                 "Cached search results are older than the project update. Invalidating cache."
             )
-            cache.clear()  #! add permissions
-        sly.logger.info("Using cached search results")
-        return cache.results
+            cache.clear()
+        else:
+            sly.logger.info("Using cached search results")
+            return cache.results
 
     image_infos = await image_get_list_async(
         api, event.project_id, images_ids=event.image_ids if event.image_ids else None
@@ -168,14 +171,16 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",
             len(image_infos),
         )
-        image_urls = [image_info.cas_url for image_info in image_infos]
+        image_urls = [
+            image_info.cas_url for image_info in image_infos
+        ]  #! check if we need to separate requests
     else:
         image_infos = await get_lite_image_infos(
             api,
             cas_size=g.IMAGE_SIZE_FOR_CAS,
             project_id=event.project_id,
         )
-        image_urls = []  #! check if we need this
+        image_urls = []
     # Combine text prompts and image URLs to create a query.
     queries = text_prompts + image_urls
     sly.logger.info("Final query: %s", queries)

@@ -18,7 +18,7 @@ class SearchCache:
     The cache is automatically saved to storage when updated and loaded when initialized.
     """
 
-    SYSTEM_DIR = "/system/embeddings-search-cache"
+    SYSTEM_DIR = "/ai-search-cache"
 
     def __init__(self, api: sly.Api, project_id: int, prompt: str, settings: Dict):
         """
