@@ -49,6 +49,9 @@ class SlyCasClient(Client):
             if self._scheme == "http":
                 if r.path.startswith("/net/") and _port is None:
                     _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
+                elif r.path.startswith("/net/") and _port:
+                    _new_port = _port
+                    _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
             else:
                 _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
 
