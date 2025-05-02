@@ -232,6 +232,21 @@ def get_project_info(api: sly.Api, project_id: int) -> sly.ProjectInfo:
     return api.project.get_info_by_id(project_id)
 
 
+@to_thread
+@timeit
+def get_team_info(api: sly.Api, team_id: int) -> sly.TeamInfo:
+    """Returns team info by ID.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param team_id: ID of the team to get info.
+    :type team_id: int
+    :return: Team info.
+    :rtype: sly.TeamInfo
+    """
+    return api.team.get_info_by_id(team_id)
+
+
 def _get_project_info_by_name(
     api: sly.Api, workspace_id: int, project_name: str
 ) -> sly.ProjectInfo:
@@ -617,7 +632,7 @@ async def get_all_projects(
     tasks = []
     if project_ids is not None:
         for batch in batched(project_ids):
-            data[ApiField.FILTERS] = [
+            data[ApiField.FILTERS] = [  # TODO update with embeddingsInProgress
                 {
                     ApiField.FIELD: ApiField.ID,
                     ApiField.OPERATOR: "in",

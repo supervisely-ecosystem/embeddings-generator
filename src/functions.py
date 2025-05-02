@@ -14,6 +14,7 @@ from src.utils import (
     get_datasets,
     get_lite_image_infos,
     get_project_info,
+    get_team_info,
     parse_timestamp,
     timeit,
     update_embeddings_data,
@@ -153,6 +154,25 @@ async def auto_update_embeddings(
     """
     if project_info is None:
         project_info = await get_project_info(api, project_id)
+
+    team_info: sly.TeamInfo = await get_team_info(project_info.team_id)
+    if team_info.usage.plan == "free":
+        logger.debug(
+            "Auto update embeddings is not available on free plan.",
+            extra={
+                "project_id": project_id,
+                "project_name": project_info.name,
+                "team_id": team_info.id,
+                "team_name": team_info.name,
+            },
+        )
+        api.project.disable_embeddings(project_id)
+        logger.info(
+            "Embeddings are disabled for project %s (id: %d) due to free plan.",
+            project_info.name,
+            project_id,
+        )
+        return
 
     # Check if embeddings activated for the project
     log_extra = {
