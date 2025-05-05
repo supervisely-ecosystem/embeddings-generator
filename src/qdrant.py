@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 import numpy as np
 import supervisely as sly
@@ -9,14 +10,39 @@ from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
 import src.globals as g
 from src.utils import ImageInfoLite, TupleFields, timeit, with_retries
 
-client = AsyncQdrantClient(g.qdrant_host)
+
+def create_client_from_url(url: str) -> AsyncQdrantClient:
+    """Create a Qdrant client instance from URL.
+
+    Args:
+        url: The Qdrant service URL in format http(s)://<host>[:port]
+
+    Returns:
+        AsyncQdrantClient: Configured client instance
+    """
+    parsed_host = urlparse(url)
+
+    # Validate URL format
+    if parsed_host.scheme not in ["http", "https"]:
+        raise ValueError(f"Qdrant host should be in format http(s)://<host>[:port], got {url}")
+
+    # Create client with appropriate settings based on URL
+    return AsyncQdrantClient(
+        url=parsed_host.hostname,
+        https=parsed_host.scheme == "https",
+        port=parsed_host.port or 6333,  # Default Qdrant port
+    )
+
+
+client = create_client_from_url(g.qdrant_host)
+
 
 try:
-    sly.logger.info("Connecting to Qdrant at %s...", g.qdrant_host)
+    sly.logger.info(f"Connecting to Qdrant at {g.qdrant_host}...")
     QdrantClient(g.qdrant_host).get_collections()
-    sly.logger.info("Connected to Qdrant at %s", g.qdrant_host)
+    sly.logger.info(f"Connected to Qdrant at {g.qdrant_host}")
 except Exception as e:
-    sly.logger.error("Failed to connect to Qdrant at %s with error: %s", g.qdrant_host, e)
+    sly.logger.error(f"Failed to connect to Qdrant at {g.qdrant_host}: {e}")
 
 
 IMAGES_COLLECTION = "images"
