@@ -8,7 +8,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
 
 import src.globals as g
-from src.utils import ImageInfoLite, TupleFields, timeit, with_retries
+from src.utils import ImageInfoLite, TupleFields, parse_timestamp, timeit, with_retries
 
 
 def create_client_from_url(url: str) -> AsyncQdrantClient:
@@ -272,7 +272,9 @@ def _diff(image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]) -> Lis
 
     for image_info in image_infos:
         point = points_dict.get(image_info.hash)
-        if point is None or point.payload.get(TupleFields.UPDATED_AT) != image_info.updated_at:
+        if point is None or parse_timestamp(
+            point.payload.get(TupleFields.UPDATED_AT)
+        ) < parse_timestamp(image_info.updated_at):
             diff.append(image_info)
 
     return diff

@@ -64,43 +64,64 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         event.force,
         event.image_ids,
     )
-
-    # Step 1: Ensure collection exists in Qdrant.
-    await qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION)
-
-    if event.image_ids:
-        image_infos = await image_get_list_async(api, event.project_id, images_ids=event.image_ids)
-    else:
-        image_infos = await image_get_list_async(api, event.project_id)
-
-    # Step 2: If force is True, delete existing collection items.
-    if event.force:
-        image_hashes = [info.hash for info in image_infos]
-        sly.logger.debug(
-            "Force enabled for project %s, will recreate items in collection %s.",
+    project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+    if project_info.embeddings_in_progress:
+        sly.logger.info(
+            "Embeddings creation is already in progress for project %s. Skipping.",
             event.project_id,
-            qdrant.IMAGES_COLLECTION,
         )
-        await qdrant.delete_collection_items(image_hashes)
+        return
+    if parse_timestamp(project_info.embeddings_updated_at) > parse_timestamp(project_info.updated_at):
+        sly.logger.info(
+            "Embeddings are up to date for project %s. Skipping.",
+            event.project_id,
+        )
+    try:
+        api.project.set_embeddings_in_progress(event.project_id, True)
+        # Step 1: Ensure collection exists in Qdrant.
+        await qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION)
 
-    # Step 3: Process images.
-    image_infos = await process_images(api, event.project_id, image_infos=image_infos)
-    image_hashes = [info.hash for info in image_infos]
+        if event.image_ids:
+            image_infos = await image_get_list_async(
+                api, event.project_id, images_ids=event.image_ids
+            )
+        else:
+            image_infos = await image_get_list_async(api, event.project_id)
 
-    if event.image_ids is None and len(image_infos) > 0:
-        # Step 4: Update custom data.
-        project_info = await get_project_info(api, event.project_id)
-        await update_embeddings_data(api, event.project_id, project_info.updated_at)
+        # Step 2: If force is True, delete existing collection items.
+        if event.force:
+            image_hashes = [info.hash for info in image_infos]
+            sly.logger.debug(
+                "Force enabled for project %s, will recreate items in collection %s.",
+                event.project_id,
+                qdrant.IMAGES_COLLECTION,
+            )
+            await qdrant.delete_collection_items(image_hashes)
 
-    sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
-    _, vectors = await qdrant.get_items_by_hashes(
-        qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
-    )
-    # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+        # Step 3: Process images.
+        image_infos = await process_images(api, event.project_id, image_infos=image_infos)
+        image_hashes = [info.hash for info in image_infos]
 
-    sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
+        if event.image_ids is None and len(image_infos) > 0:
+            # Step 4: Update embeddings data.
+            # project_info = await get_project_info(api, event.project_id)
+            await update_embeddings_data(api, event.project_id, project_info.updated_at)
 
-    return [info.to_json for info in image_infos], vectors
+        sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
+        _, vectors = await qdrant.get_items_by_hashes(
+            qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
+        )
+        # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+
+        sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
+        api.project.set_embeddings_in_progress(event.project_id, False)
+        return [info.to_json for info in image_infos], vectors
+    except Exception as e:
+        sly.logger.error(
+            "Error while creating embeddings for project %s: %s", event.project_id, str(e)
+        )
+        api.project.set_embeddings_in_progress(event.project_id, False)
+        raise e
 
 
 @app.event(Event.Search, use_state=True)
