@@ -264,7 +264,7 @@ def get_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
     """
     ignore_fields = [TupleFields.ID]
     payloads = [
-        {k: v for k, v in image_info._asdict().items() if k not in ignore_fields}
+        {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
         for image_info in image_infos
     ]
     return payloads
