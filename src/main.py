@@ -178,9 +178,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             sly.logger.info("Using cached search results")
             return cache.results
 
-    image_infos = await image_get_list_async(
-        api, event.project_id, images_ids=event.image_ids if event.image_ids else None
-    )
+    # Collect project images info to use later for mapping.
+    image_infos = await image_get_list_async(api, event.project_id)
+
     text_prompts = []
     if event.prompt:
         if isinstance(event.prompt, list):
@@ -191,29 +191,23 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
     sly.logger.debug("Formatted text prompts: %s", text_prompts)
 
+    image_urls = []
     # If request contains image IDs, get image URLs to add to the query.
-    image_infos = []
     if event.image_ids:
-        image_infos = await get_lite_image_infos(
+        filtered_image_infos = [info for info in image_infos if info.id in event.image_ids]
+        lite_image_infos = await get_lite_image_infos(
             api,
             cas_size=g.IMAGE_SIZE_FOR_CAS,
             project_id=event.project_id,
-            image_ids=event.image_ids,
+            image_infos=filtered_image_infos,
         )
         sly.logger.debug(
             "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",
-            len(image_infos),
+            len(lite_image_infos),
         )
-        image_urls = [
-            image_info.cas_url for image_info in image_infos
-        ]  #! check if we need to separate requests
-    else:
-        image_infos = await get_lite_image_infos(
-            api,
-            cas_size=g.IMAGE_SIZE_FOR_CAS,
-            project_id=event.project_id,
-        )
-        image_urls = []
+        image_urls = [image_info.cas_url for image_info in lite_image_infos]
+        #! check if we need to separate requests
+
     # Combine text prompts and image URLs to create a query.
     queries = text_prompts + image_urls
     sly.logger.info("Final query: %s", queries)
