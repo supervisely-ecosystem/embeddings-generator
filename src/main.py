@@ -118,6 +118,11 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
         sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
         api.project.set_embeddings_in_progress(event.project_id, False)
+        sly.logger.info(
+            "Embeddings creation for project %s has been completed. %d images processed.",
+            event.project_id,
+            len(image_infos),
+        )
         return [info.to_json for info in image_infos], vectors
     except Exception as e:
         sly.logger.error(
