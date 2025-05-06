@@ -155,7 +155,7 @@ async def auto_update_embeddings(
     if project_info is None:
         project_info = await get_project_info(api, project_id)
 
-    team_info: sly.TeamInfo = await get_team_info(project_info.team_id)
+    team_info: sly.TeamInfo = await get_team_info(api, project_info.team_id)
     if team_info.usage.plan == "free":
         logger.debug(
             "Auto update embeddings is not available on free plan.",

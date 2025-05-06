@@ -71,11 +71,14 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             event.project_id,
         )
         return
-    if parse_timestamp(project_info.embeddings_updated_at) > parse_timestamp(project_info.updated_at):
+    if project_info.embeddings_updated_at is not None and parse_timestamp(
+        project_info.embeddings_updated_at
+    ) > parse_timestamp(project_info.updated_at):
         sly.logger.info(
             "Embeddings are up to date for project %s. Skipping.",
             event.project_id,
         )
+        return
     try:
         api.project.set_embeddings_in_progress(event.project_id, True)
         # Step 1: Ensure collection exists in Qdrant.
@@ -154,7 +157,11 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     cache = SearchCache(api, event.project_id, prompt_str, settings)
 
     if cache.results is not None and cache.timestamp is not None:
-        if parse_timestamp(cache.timestamp) < parse_timestamp(
+        if cache.project_info.embeddings_updated_at is None:
+            # If the project has no embeddings, invalidate the cache.
+            sly.logger.info("Project %s has no embeddings. Invalidating cache.", event.project_id)
+            cache.clear()
+        elif parse_timestamp(cache.timestamp) < parse_timestamp(
             cache.project_info.embeddings_updated_at
         ):
             # If the cache is older than the project update timestamp, invalidate it.

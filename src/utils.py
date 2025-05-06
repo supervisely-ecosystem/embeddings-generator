@@ -624,20 +624,51 @@ async def get_all_projects(
 ) -> List[sly.ProjectInfo]:
     """
     Get all projects from the Supervisely server that have a flag for automatic embeddings update.
+
+    Fields that will be returned:
+        - id
+        - name
+        - updated_at
+        - embeddings_enabled
+        - embeddings_in_progress
+        - embeddings_updated_at
+        - team_id
+        - workspace_id
+        - items_count
+
     """
     method = "projects.list.all"
     convert_json_info = api.project._convert_json_info
-    fields = [ApiField.ID, ApiField.NAME, ApiField.CUSTOM_DATA]
-    data = {ApiField.SKIP_EXPORTED: True, ApiField.FIELDS: fields}
+    fields = [
+        ApiField.EMBEDDINGS_ENABLED,
+        ApiField.EMBEDDINGS_IN_PROGRESS,
+        ApiField.EMBEDDINGS_UPDATED_AT,
+    ]
+    data = {
+        ApiField.SKIP_EXPORTED: True,
+        ApiField.EXTRA_FIELDS: fields,
+        ApiField.FILTER: [
+            {
+                ApiField.FIELD: ApiField.EMBEDDINGS_ENABLED,
+                ApiField.OPERATOR: "=",
+                ApiField.VALUE: True,
+            }
+        ],
+    }
     tasks = []
     if project_ids is not None:
         for batch in batched(project_ids):
-            data[ApiField.FILTERS] = [  # TODO update with embeddingsInProgress
+            data[ApiField.FILTER] = [
                 {
                     ApiField.FIELD: ApiField.ID,
                     ApiField.OPERATOR: "in",
                     ApiField.VALUE: batch,
-                }
+                },
+                {
+                    ApiField.FIELD: ApiField.EMBEDDINGS_ENABLED,
+                    ApiField.OPERATOR: "=",
+                    ApiField.VALUE: True,
+                },
             ]
             tasks.append(
                 get_list_all_pages_async(
@@ -664,9 +695,7 @@ async def get_all_projects(
         )
     results = []
     for task in asyncio.as_completed(tasks):
-        page_items = await task
-        filtered = [item for item in page_items if item.embeddings_enabled]
-        results.extend(filtered)
+        results.extend(await task)
     return results
 
 
