@@ -1,14 +1,24 @@
+from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import numpy as np
 import supervisely as sly
 from qdrant_client import AsyncQdrantClient, QdrantClient
+from qdrant_client.conversions import common_types as types
+from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
 
 import src.globals as g
-from src.utils import ImageInfoLite, TupleFields, parse_timestamp, timeit, with_retries
+from src.utils import (
+    ImageInfoLite,
+    QdrantFields,
+    TupleFields,
+    parse_timestamp,
+    timeit,
+    with_retries,
+)
 
 
 def create_client_from_url(url: str) -> AsyncQdrantClient:
@@ -75,6 +85,55 @@ def uuid_to_bytes(hash_uuid: uuid.UUID) -> bytes:
     return hash_uuid.bytes
 
 
+def get_search_filter(
+    project_id: Optional[int] = None,
+    dataset_id: Optional[int] = None,
+    image_ids: Optional[List[int]] = None,
+):
+    """Get search filter for Qdrant collection.
+
+    :param project_id: Project ID to filter by.
+    :type project_id: Optional[int], optional
+    :param dataset_id: Dataset ID to filter by.
+    :type dataset_id: Optional[int], optional
+    :param image_ids: List of image IDs to filter by.
+    :type image_ids: Optional[List[int]], optional
+    :return: Filter for Qdrant collection.
+    :rtype: dict
+    """
+
+    filter = None
+    if image_ids:
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key=QdrantFields.IMAGE_IDS,
+                    match=models.MatchAny(any=image_ids),
+                ),
+            ],
+        )
+    elif dataset_id:
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key=QdrantFields.DATASET_IDS,
+                    match=models.MatchAny(any=[dataset_id]),
+                ),
+            ],
+        )
+    elif project_id:
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key=QdrantFields.PROJECT_IDS,
+                    match=models.MatchAny(any=[project_id]),
+                ),
+            ],
+        )
+
+    return filter
+
+
 @with_retries()
 async def delete_collection_items(
     item_ids: List[str], collection_name: str = IMAGES_COLLECTION
@@ -87,12 +146,13 @@ async def delete_collection_items(
     :param collection_name: The name of the collection to delete items from, defaults to IMAGES_COLLECTION.
     :type collection_name: str
     """
-    sly.logger.debug("Deleting items from collection %s...", item_ids)
+    ids = [hash_to_uuid(hash).hex for hash in item_ids]
+    sly.logger.debug("Deleting items from collection %s...", ids)
     try:
-        await client.delete(collection_name, item_ids)
-        sly.logger.debug("Items %s deleted.", item_ids)
+        await client.delete(collection_name, ids)
+        sly.logger.debug("Items %s deleted.", ids)
     except UnexpectedResponse:
-        sly.logger.debug("Something went wrong, while deleting %s .", item_ids)
+        sly.logger.debug("Something went wrong, while deleting %s .", ids)
 
 
 @with_retries()
@@ -122,6 +182,28 @@ async def get_or_create_collection(
             vectors_config=VectorParams(size=size, distance=distance),
         )
         sly.logger.debug("Collection %s created.", collection_name)
+
+        # Create necessary indexes for efficient filtering
+        await client.create_payload_index(
+            collection_name=collection_name,
+            field_name=f"{QdrantFields.PROJECT_IDS}",
+            field_schema="keyword",
+        )
+
+        await client.create_payload_index(
+            collection_name=collection_name,
+            field_name=f"{QdrantFields.DATASET_IDS}",
+            field_schema="keyword",
+        )
+
+        await client.create_payload_index(
+            collection_name=collection_name,
+            field_name=f"{QdrantFields.IMAGE_IDS}",
+            field_schema="keyword",
+        )
+
+        sly.logger.debug("Created payload indexes for collection %s", collection_name)
+
         collection = await client.get_collection(collection_name)
     return collection
 
@@ -166,7 +248,12 @@ async def get_items_by_hashes(
     points = await client.retrieve(
         collection_name, point_ids, with_payload=True, with_vectors=with_vectors
     )
-    image_infos = [ImageInfoLite(id=None, **point.payload) for point in points]
+    for point in points:
+        point.payload.pop(QdrantFields.REFERENCE_IDS, None)
+    image_infos = [
+        ImageInfoLite(id=None, dataset_id=None, project_id=None, **point.payload)
+        for point in points
+    ]
     if with_vectors:
         vectors = [point.vector for point in points]
         return image_infos, vectors
@@ -179,6 +266,7 @@ async def upsert(
     collection_name: str,
     vectors: List[np.ndarray],
     image_infos: List[ImageInfoLite],
+    reference_ids: List[Optional[Dict[str, int]]],
 ) -> None:
     """Upsert vectors and payloads to the collection.
 
@@ -191,17 +279,11 @@ async def upsert(
     """
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
-    payloads = get_payloads(image_infos)
+    payloads = get_payloads(image_infos, reference_ids)
+    ids = [hash_to_uuid(image_info.hash).hex for image_info in image_infos]
     sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
     sly.logger.debug("Upserting %d payloads to collection %s.", len(payloads), collection_name)
-    await client.upsert(
-        collection_name,
-        Batch(
-            vectors=vectors,
-            ids=[hash_to_uuid(image_info.hash).hex for image_info in image_infos],
-            payloads=payloads,
-        ),
-    )
+    await client.upsert(collection_name, Batch(vectors=vectors, ids=ids, payloads=payloads))
 
     if sly.is_development():
         # By default qdrant should overwrite vectors with the same ids
@@ -235,7 +317,7 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
     )
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
 
-    diff = _diff(image_infos, points)
+    diff, refs = _diff(image_infos, points)
 
     sly.logger.debug("Found %d points that need to be updated.", len(diff))
     if sly.is_development():
@@ -249,52 +331,80 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
             percent,
         )
 
-    return diff
+    return diff, refs
 
 
 @timeit
 def _diff(image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]) -> List[ImageInfoLite]:
     """Compare ImageInfoLite objects with points from the collection and return the difference.
     Uses updated_at field to compare points.
+    Returns ImageInfoLite objects that need to be updated and reference ids that represent in which projects or datasets
+    the image is used.
 
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     :param points: A list of dictionaries with points from the collection.
     :type points: List[Dict[str, Any]]
     :return: A list of ImageInfoLite objects that need to be updated.
-    :rtype: List[ImageInfoLite]
+    :rtype: List[ImageInfoLite], List[Dict[str, Any]]
     """
     # If the point with the same id doesn't exist in the collection, it will be added to the diff.
     # If the point with the same id exsts - check if updated_at is exactly the same, or add to the diff.
     # Image infos and points have different length, so we need to iterate over image infos.
     diff = []
+    refs = []
     points_dict = {point.payload.get(TupleFields.HASH): point for point in points}
 
     for image_info in image_infos:
         point = points_dict.get(image_info.hash)
-        if point is None or parse_timestamp(
-            point.payload.get(TupleFields.UPDATED_AT)
-        ) < parse_timestamp(image_info.updated_at):
+        if point is None:
             diff.append(image_info)
+            refs.append(None)
+        elif parse_timestamp(point.payload.get(TupleFields.UPDATED_AT)) < parse_timestamp(
+            image_info.updated_at
+        ):
+            diff.append(image_info)
+            refs.append(point.payload.get(QdrantFields.REFERENCE_IDS))
 
-    return diff
+    return diff, refs
 
 
 @timeit
-def get_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
+def get_payloads(
+    image_infos: List[ImageInfoLite], references: List[Optional[Dict[str, int]]]
+) -> List[Dict[str, Any]]:
     """Get payloads from ImageInfoLite objects.
     Converts named tuples to dictionaries and removes the id field.
 
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
+    :param reference_ids: A dictionary with reference IDs.
+    :type reference_ids: List[Optional[Dict[str, int]]]
     :return: A list of payloads.
     :rtype: List[Dict[str, Any]]
     """
-    ignore_fields = [TupleFields.ID]
-    payloads = [
-        {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
-        for image_info in image_infos
+    ignore_fields = [
+        TupleFields.ID,
+        TupleFields.PROJECT_ID,
+        TupleFields.DATASET_ID,
+        TupleFields.SCORE,
     ]
+    payloads = []
+    for image_info, reference in zip(image_infos, references):
+        payload = {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
+        if reference is not None:
+            new_refs = deepcopy(reference)
+            new_refs[QdrantFields.IMAGE_IDS].append(image_info.id)
+            new_refs[QdrantFields.PROJECT_IDS].append(image_info.project_id)
+            new_refs[QdrantFields.DATASET_IDS].append(image_info.dataset_id)
+        else:
+            new_refs = {
+                QdrantFields.IMAGE_IDS: [image_info.id],
+                QdrantFields.PROJECT_IDS: [image_info.project_id],
+                QdrantFields.DATASET_IDS: [image_info.dataset_id],
+            }
+        payload[QdrantFields.REFERENCE_IDS] = new_refs
+        payloads.append(payload)
     return payloads
 
 
@@ -304,6 +414,7 @@ async def search(
     collection_name: str,
     query_vector: np.ndarray,
     limit: int,
+    query_filter: Optional[types.Filter] = None,
     return_vectors: bool = False,
     return_scores: bool = True,
 ) -> Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]:
@@ -318,6 +429,8 @@ async def search(
     :type query_vector: np.ndarray
     :param limit: The number of items to return.
     :type limit: int
+    :param query_filter: The filter to use for searching, defaults to None.
+    :type query_filter: Optional[types.Filter], optional
     :param return_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type return_vectors: bool, optional
     :param return_scores: Whether to return scores along with ImageInfoLite objects, defaults to True.
@@ -327,14 +440,21 @@ async def search(
     """
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
+
     points = await client.search(
         collection_name,
         query_vector,
+        query_filter=query_filter,
         limit=limit,
         with_payload=True,
         with_vectors=return_vectors,
     )
-    result = {"items": [ImageInfoLite(point.id, **point.payload) for point in points]}
+    result = {
+        "items": [
+            ImageInfoLite(id=None, dataset_id=None, project_id=None, **point.payload)
+            for point in points
+        ]
+    }
 
     if return_vectors:
         result["vectors"] = [point.vector for point in points]
@@ -365,12 +485,16 @@ async def get_items(
         collection = await client.get_collection(collection_name)
         limit = collection.points_count
     points, _ = await client.scroll(
-        collection_name, limit=limit, with_payload=True, with_vectors=True
+        collection_name,
+        limit=limit,
+        with_payload=True,
+        with_vectors=True,
     )
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
-    return [ImageInfoLite(id=None, **point.payload) for point in points], [
-        point.vector for point in points
-    ]
+    return [
+        ImageInfoLite(id=None, project_id=None, dataset_id=None, **point.payload)
+        for point in points
+    ], [point.vector for point in points]
 
 
 @timeit

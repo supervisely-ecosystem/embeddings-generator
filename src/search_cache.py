@@ -1,12 +1,11 @@
 import hashlib
 import json
-import pickle
-import tempfile
-import time
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, List
 
 import supervisely as sly
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+
+from src.utils import ImageInfoLite
 
 
 class SearchCache:
@@ -18,7 +17,7 @@ class SearchCache:
     The cache is automatically saved to storage when updated and loaded when initialized.
     """
 
-    SYSTEM_DIR = "/ai-search-cache"
+    SYSTEM_NAME_PREFIX = "AI Search Collection: "
 
     def __init__(self, api: sly.Api, project_id: int, prompt: str, settings: Dict):
         """
@@ -28,12 +27,12 @@ class SearchCache:
         self.project_id = project_id
         self.project_info = api.project.get_info_by_id(project_id)
         self.team_id = self.project_info.team_id
-        self.results: Dict[str, Tuple[float, Any]] = {}
+        self.collection_id: int = None
         self.timestamp: str = None
         self.prompt_text = prompt
         self.settings = settings
         self.key = self._get_key(prompt, project_id, settings)
-        self.cache_file_path = self.SYSTEM_DIR + f"/{self.project_id}/{self.key}.pkl"
+        self.cache_collection_name = self.SYSTEM_NAME_PREFIX + f"Unique Key - {self.key}"
         self.load()
 
     def _get_key(self, prompt: str, project_id: str, settings: Dict) -> str:
@@ -52,59 +51,44 @@ class SearchCache:
         serialized = json.dumps(cache_data, sort_keys=True)
         return hashlib.md5(serialized.encode()).hexdigest()
 
-    def save(self, results: Any):
+    def save(self, results: List[ImageInfoLite]) -> int:
         """
-        Save the current cache to a file using pickle serialization.
+        Save the current cache as Entities Collection with the given name and unique key.
 
         Captures and logs any errors that occur during saving.
-        """
-        self.results = results
-        self.timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        data_to_save = {"result": self.results, "timestamp": self.timestamp}
 
-        try:
-            temp_cache = tempfile.NamedTemporaryFile(
-                "w+b", prefix=f"{self.project_id}", suffix=".pkl", delete=False
-            )
-            pickle.dump(data_to_save, temp_cache)
-            temp_cache.close()
-            sly.logger.debug("Uploading cache to storage", extra={"path": self.cache_file_path})
-            self.api.file.upload(
-                self.team_id,
-                temp_cache.name,
-                self.cache_file_path,
-                progress_cb=None,
-            )
-            sly.fs.silent_remove(temp_cache.name)
-        except Exception as e:
-            print(f"Error saving cache: {e}")
+        Returns collection ID of the saved cache.
+
+        """
+        collection_items = [
+            CollectionItem(id=info.id, meta=CollectionItem.Meta(score=info.score))
+            for info in results
+        ]
+        self.collection_id = self.api.entities_collection.create(
+            self.project_id,
+            self.cache_collection_name,
+            CollectionType.AI_SEARCH,
+            self.key,
+        )
+        self.api.entities_collection.add_items(self.collection_id, collection_items)
+
+        return self.collection_id
 
     def load(self):
         """
-        Load cache data from the file if it exists.
+        Search the Enitites Collection with the unique key in the storage.
 
-        If the file doesn't exist or there's an error loading it,
+        If the Collection doesn't exist or there's an error loading it,
         the cache will be initialized as empty.
         """
-        if not self.api.file.exists(self.team_id, self.cache_file_path):
-            return
-
-        try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                local_path = tmp_dir + self.cache_file_path
-                self.api.file.download(self.team_id, self.cache_file_path, local_path)
-                with open(local_path, "rb") as f:
-                    data = pickle.load(f)
-                    self.results = data.get("result", {})
-                    self.timestamp = data.get("timestamp", None)
-        except Exception as e:
-            print(f"Error loading cache: {e}")
-            # Start with empty caches if there was an error
-            self.results = {}
-            self.timestamp = None
+        collection = self.api.entities_collection.get_info_by_ai_search_key(
+            self.project_id, self.key
+        )
+        self.collection_id = collection.id if collection else None
+        self.timestamp = collection.updated_at if collection else None
 
     def clear(self):
-        """Clear the cache and remove the file from storage."""
-        self.results = {}
+        """Clear the cache and remove Entities Collection."""
+        self.api.entities_collection.remove(self.collection_id)
+        self.collection_id = None
         self.timestamp = None
-        self.api.file.remove(self.team_id, self.cache_file_path)

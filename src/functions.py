@@ -62,7 +62,7 @@ async def process_images(
     if await qdrant.collection_exists(qdrant.IMAGES_COLLECTION):
         # Get diff of image infos, check if they are already
         # in the Qdrant collection and have the same updated_at field.
-        image_infos = await qdrant.get_diff(qdrant.IMAGES_COLLECTION, image_infos)
+        image_infos, references = await qdrant.get_diff(qdrant.IMAGES_COLLECTION, image_infos)
 
     if len(image_infos) == 0:
         logger.debug("All images are up-to-date.")
@@ -71,7 +71,7 @@ async def process_images(
     current_progress = 0
     total_progress = len(image_infos)
     logger.debug("Images to be processed: %d.", total_progress)
-    for image_batch in sly.batched(image_infos):
+    for image_batch, references_batch in zip(sly.batched(image_infos), sly.batched(references)):
         # Get vectors from images.
         # base64_data = [await base64_from_url(image_info.cas_url) for image_info in image_batch]
         # vectors_batch = await cas.get_vectors(
@@ -82,11 +82,7 @@ async def process_images(
         logger.debug("Got %d vectors from images.", len(vectors_batch))
 
         # Upsert vectors to Qdrant.
-        await qdrant.upsert(
-            qdrant.IMAGES_COLLECTION,
-            vectors_batch,
-            image_batch,
-        )
+        await qdrant.upsert(qdrant.IMAGES_COLLECTION, vectors_batch, image_batch, references_batch)
         current_progress += len(image_batch)
         logger.debug(
             "Upserted %d vectors to Qdrant. [%d/%d]",

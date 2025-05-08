@@ -21,6 +21,7 @@ class TupleFields:
     ID = "id"
     HASH = "hash"
     DATASET_ID = "dataset_id"
+    PROJECT_ID = "project_id"
     FULL_URL = "full_url"
     CAS_URL = "cas_url"
     HDF5_URL = "hdf5_url"
@@ -32,6 +33,7 @@ class TupleFields:
     ATLAS_INDEX = "atlasIndex"
     VECTOR = "vector"
     IMAGES = "images"
+    SCORE = "score"
 
 
 class QdrantFields:
@@ -42,6 +44,12 @@ class QdrantFields:
     OPTION = "option"
     RANDOM = "random"
     CENTROIDS = "centroids"
+
+    # Payload Fields
+    REFERENCE_IDS = "reference_ids"
+    PROJECT_IDS = "project_ids"
+    DATASET_IDS = "dataset_ids"
+    IMAGE_IDS = "image_ids"
 
 
 class EventFields:
@@ -62,22 +70,33 @@ class EventFields:
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"
 
+    # Search by fields
+    BY_PROJECT_ID = "by_project_id"
+    BY_DATASET_ID = "by_dataset_id"
+    BY_IMAGE_IDS = "by_image_ids"
+
 
 @dataclass
 class ImageInfoLite:
     id: int
+    dataset_id: int
+    project_id: int
     hash: str
     full_url: str
     cas_url: str
     updated_at: str  # or datetime.datetime if you parse it
+    score = None
 
     def to_json(self):
         return {
             TupleFields.ID: self.id,
+            TupleFields.DATASET_ID: self.dataset_id,
+            TupleFields.PROJECT_ID: self.project_id,
             TupleFields.HASH: self.hash,
             TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.UPDATED_AT: self.updated_at,
+            TupleFields.SCORE: self.score,
         }
         # Alternative: return asdict(self)  # if field names match keys
 
@@ -85,10 +104,13 @@ class ImageInfoLite:
     def from_json(cls, data):
         return cls(
             id=data[TupleFields.ID],
+            dataset_id=data[TupleFields.DATASET_ID],
+            project_id=data[TupleFields.PROJECT_ID],
             hash=data[TupleFields.HASH],
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             updated_at=data[TupleFields.UPDATED_AT],
+            score=data.get(TupleFields.SCORE, None),
         )
 
 
@@ -340,6 +362,8 @@ async def get_lite_image_infos(
     :type api: sly.Api
     :param cas_size: Size of the image for CAS, it will be added to URL.
     :type cas_size: int
+    :param project_id: ID of the project to get images from.
+    :type project_id: int
     :param dataset_id: ID of the dataset to get images from.
     :type dataset_id: int, optional
     :param image_ids: List of image IDs to get image infos.
@@ -355,6 +379,8 @@ async def get_lite_image_infos(
     return [
         ImageInfoLite(
             id=image_info.id,
+            dataset_id=image_info.dataset_id,
+            project_id=project_id,
             hash=image_info.hash,
             full_url=image_info.full_storage_url,
             cas_url=resize_image_url(

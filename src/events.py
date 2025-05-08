@@ -29,11 +29,17 @@ class Event:
             limit: Optional[int] = None,
             prompt: Optional[str] = None,
             image_ids: Optional[List[int]] = None,
+            by_project_id: Optional[int] = None,
+            by_dataset_id: Optional[int] = None,
+            by_image_ids: Optional[List[int]] = None,
         ):
             self.project_id = project_id
             self.limit = limit
             self.prompt = prompt
             self.image_ids = image_ids
+            self.by_project_id = by_project_id
+            self.by_dataset_id = by_dataset_id
+            self.by_image_ids = by_image_ids
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -42,6 +48,9 @@ class Event:
                 data.get(EventFields.LIMIT),
                 data.get(EventFields.PROMPT),
                 data.get(EventFields.IMAGE_IDS),
+                data.get(EventFields.BY_PROJECT_ID),
+                data.get(EventFields.BY_DATASET_ID),
+                data.get(EventFields.BY_IMAGE_IDS),
             )
 
     class Diverse:

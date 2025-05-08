@@ -2,6 +2,7 @@ import asyncio
 import datetime
 from typing import Dict, List
 
+import numpy as np
 import supervisely as sly
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Request
@@ -16,6 +17,7 @@ from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
 from src.search_cache import SearchCache
 from src.utils import (
+    EventFields,
     ImageInfoLite,
     embeddings_up_to_date,
     get_lite_image_infos,
@@ -146,14 +148,24 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # response: List[List[Dict]]
 
     sly.logger.info(
-        "Searching for similar images in project %s, limit: %s. Text prompt: %s, Image IDs: %s.",
+        "Searching for similar images in project %s, limit: %s. Text prompt: %s, Image IDs: %s. "
+        "Search will be perormed by image IDs: %s, dataset ID: %s, project ID: %s.",
         event.project_id,
         event.limit,
         event.prompt,
         event.image_ids,
+        event.by_image_ids,
+        event.by_dataset_id,
+        event.by_project_id,
     )
 
-    settings = {"limit": event.limit, "image_ids": event.image_ids if event.image_ids else None}
+    settings = {
+        EventFields.LIMIT: event.limit,
+        EventFields.IMAGE_IDS: event.image_ids if event.image_ids else None,
+        EventFields.BY_IMAGE_IDS: event.by_image_ids,
+        EventFields.BY_DATASET_ID: event.by_dataset_id,
+        EventFields.BY_PROJECT_ID: event.by_project_id,
+    }
 
     # Try to get cached results first
     prompt_str = (
@@ -161,7 +173,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     )
     cache = SearchCache(api, event.project_id, prompt_str, settings)
 
-    if cache.results is not None and cache.timestamp is not None:
+    if cache.collection_id is not None and cache.timestamp is not None:
         if cache.project_info.embeddings_updated_at is None:
             # If the project has no embeddings, invalidate the cache.
             sly.logger.info("Project %s has no embeddings. Invalidating cache.", event.project_id)
@@ -176,7 +188,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             cache.clear()
         else:
             sly.logger.info("Using cached search results")
-            return cache.results
+            return cache.collection_id
 
     # Collect project images info to use later for mapping.
     image_infos = await image_get_list_async(api, event.project_id)
@@ -222,31 +234,59 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     results = []
     tasks = []
 
-    async def _search_task(project_id, vector, limit, query):
-        return (await qdrant.search(project_id, vector, limit), query)
+    async def _search_task(collection: int, vector: np.ndarray, limit: int, query_filter, query):
+        return (
+            await qdrant.search(
+                collection_name=collection,
+                query_vector=vector,
+                limit=limit,
+                query_filter=query_filter,
+            ),
+            query,
+        )
+
+    search_filter = None
+
+    if event.by_image_ids:
+        # If image_ids are provided, create a filter for the search.
+        search_filter = qdrant.get_search_filter(image_ids=event.by_image_ids)
+    elif event.by_dataset_id:
+        # If dataset_id is provided, create a filter for the search.
+        search_filter = qdrant.get_search_filter(dataset_id=event.by_dataset_id)
+    elif event.by_project_id:
+        # If project_id is provided, create a filter for the search.
+        search_filter = qdrant.get_search_filter(project_id=event.by_project_id)
 
     for vector, query in zip(query_vectors, queries):
         tasks.append(
-            asyncio.create_task(_search_task(qdrant.IMAGES_COLLECTION, vector, event.limit, query))
+            asyncio.create_task(
+                _search_task(
+                    collection=qdrant.IMAGES_COLLECTION,
+                    vector=vector,
+                    limit=event.limit,
+                    query_filter=search_filter,
+                    query=query,
+                )
+            )
         )
 
     for task in asyncio.as_completed(tasks):
         search_results, query = await task
         items = search_results[qdrant.SearchResultField.ITEMS]
         items = update_id_by_hash(image_infos, items)
-        infos = [info.to_json() for info in items]
+        # items = [info.to_json() for info in items]
         if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
             for i, score in enumerate(search_results[qdrant.SearchResultField.SCORES]):
-                infos[i]["score"] = score
+                items[i].score = score
         else:
-            for i in range(len(infos)):
-                infos[i]["score"] = None
-        results.append(infos)
-        sly.logger.debug("Found %d similar images for a query %s", len(infos), query)
+            for i in range(len(items)):
+                items[i].score = None
+        results.append(items)
+        sly.logger.debug("Found %d similar images for a query %s", len(items), query)
 
     # Cache the results before returning them
-    cache.save(results)
-    return results
+    collection_id = cache.save(results)
+    return collection_id
 
 
 @app.event(Event.Diverse, use_state=True)
