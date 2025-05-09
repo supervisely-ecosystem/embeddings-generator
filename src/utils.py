@@ -379,9 +379,13 @@ async def get_lite_image_infos(
     :return: List of lite version of image infos.
     :rtype: List[ImageInfoLite]
     """
-    if not image_infos:
+    if not image_infos or len(image_infos) == 0:
         image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids)
 
+    if len(image_infos) == 0:
+        return []
+    if isinstance(image_infos[0], ImageInfoLite):
+        return image_infos
     return [
         ImageInfoLite(
             id=image_info.id,

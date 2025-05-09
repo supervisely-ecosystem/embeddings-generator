@@ -372,7 +372,7 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
     if sly.is_development():
         # To avoid unnecessary computations in production,
         # only log the percentage of points that need to be updated in development.
-        percent = round(len(diff) / len(image_infos) * 100, 2)
+        percent = round(len(diff) / len(image_infos) * 100, 2) if len(image_infos) > 0 else 0
         sly.logger.debug(
             "From the total of %d points, %d points need to be updated. (%.2f%%)",
             len(image_infos),

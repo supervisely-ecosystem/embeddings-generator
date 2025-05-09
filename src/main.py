@@ -456,12 +456,18 @@ async def projections_up_to_date_endpoint(request: Request):
     return await is_projections_up_to_date(g.api, project_id)
 
 
-scheduler = AsyncIOScheduler()
+scheduler = AsyncIOScheduler(
+    job_defaults={
+        "misfire_grace_time": 120,  # Allow jobs to be 2 minutes late
+        "coalesce": True,  # Combine missed runs into a single run
+    }
+)
 scheduler.add_job(
     run_safe,
     args=[auto_update_all_embeddings],
     trigger="interval",
     minutes=g.UPDATE_EMBEDDINGS_INTERVAL,
+    max_instances=1,  # Prevent overlapping job instances
 )
 
 
