@@ -131,7 +131,8 @@ async def update_embeddings(
                     )
                 )
             )
-        image_infos = [info for result in asyncio.gather(*tasks) for info in result]
+        results = await asyncio.gather(*tasks)
+        image_infos = [info for result in results for info in result]
         if len(image_infos) > 0:
             # image_ids = [info.id for info in image_infos]
             image_infos = await process_images(api, project_id, image_infos=image_infos)

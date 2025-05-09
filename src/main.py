@@ -150,7 +150,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
     sly.logger.info(
         "Searching for similar images in project %s, limit: %s. Text prompt: %s, Image IDs: %s. "
-        "Search will be perormed by image IDs: %s, dataset ID: %s.",
+        "Search will be performed by image IDs: %s, dataset ID: %s.",
         event.project_id,
         event.limit,
         event.prompt,
