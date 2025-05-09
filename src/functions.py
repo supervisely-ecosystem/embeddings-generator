@@ -140,7 +140,7 @@ async def update_embeddings(
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
     if len(image_infos) > 0:
-        await update_embeddings_data(api, project_id, project_info.updated_at)
+        await update_embeddings_data(api, project_id)
 
 
 @timeit

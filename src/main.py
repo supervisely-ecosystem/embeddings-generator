@@ -111,7 +111,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         if event.image_ids is None and len(image_infos) > 0:
             # Step 4: Update embeddings data.
             # project_info = await get_project_info(api, event.project_id)
-            await update_embeddings_data(api, event.project_id, project_info.updated_at)
+            await update_embeddings_data(api, event.project_id)
 
         sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
         _, vectors = await qdrant.get_items_by_hashes(

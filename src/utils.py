@@ -340,7 +340,7 @@ def get_pcd_by_name(
 
 @to_thread
 @timeit
-def update_embeddings_data(api: sly.Api, project_id: int, timestamp: str):
+def update_embeddings_data(api: sly.Api, project_id: int, timestamp: str = None):
     return api.project.set_embeddings_updated_at(project_id, timestamp)
 
 
@@ -561,11 +561,11 @@ async def embeddings_up_to_date(
 ):
     if project_info is None:
         project_info = await get_project_info(api, project_id)
-    custom_data = project_info.custom_data or {}
-    emb_updated_at = custom_data.get("embeddings_updated_at", None)
-    if emb_updated_at is None:
+    if project_info.embeddings_updated_at is None:
         return False
-    return parse_timestamp(emb_updated_at) >= project_info.updated_at
+    return parse_timestamp(project_info.embeddings_updated_at) >= parse_timestamp(
+        project_info.updated_at
+    )
 
 
 async def get_list_all_pages_async(
