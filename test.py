@@ -103,14 +103,20 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
     r = api.task.send_request(
         embeddings_generator_task_id,
         "search",
-        data={"project_id": project_id, "prompt": prompt, "limit": limit},
+        data={
+            "project_id": project_id,
+            "prompt": prompt,
+            "limit": limit,
+            # "by_dataset_id": 964,
+        },
     )
-    image_infos = r[0]
+    image_collection_id = r.get("collection_id")
+    image_infos = api.entities_collection.get_items(image_collection_id)
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
     print("Init bokeh widget")
-    this_ids = set([info["id"] for info in image_infos])
+    this_ids = set([info.id for info in image_infos])
     bokeh.clear()
     plot = Bokeh.Circle(
         x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
@@ -136,8 +142,8 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
     gallery.clean_up()
     project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
     for i, info in enumerate(image_infos, 1):
-        ann_info = api.annotation.download(info["id"])
-        gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
+        ann_info = api.annotation.download(info.id)
+        gallery.append(info.full_storage_url, ann_info, project_meta, call_update=False)
         print(f"image {i}/{len(image_infos)} added to gallery")
     gallery._update()
     gallery.loading = False
@@ -152,14 +158,20 @@ def draw_projections_per_ids(project_id, ids, limit=20):
     r = api.task.send_request(
         embeddings_generator_task_id,
         "search",
-        data={"project_id": project_id, "image_ids": ids, "limit": limit},
+        data={
+            "project_id": project_id,
+            "image_ids": ids,
+            "limit": limit,
+            # "by_dataset_id": 964,
+        },
     )
-    image_infos = r[0]
+    image_collection_id = r.get("collection_id")
+    image_infos = api.entities_collection.get_items(image_collection_id)
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
     print("Init bokeh widget")
-    this_ids = set([info["id"] for info in image_infos])
+    this_ids = set([info.id for info in image_infos])
     bokeh.clear()
     plot = Bokeh.Circle(
         x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
@@ -185,8 +197,8 @@ def draw_projections_per_ids(project_id, ids, limit=20):
     gallery.clean_up()
     project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
     for i, info in enumerate(image_infos, 1):
-        ann_info = api.annotation.download(info["id"])
-        gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
+        ann_info = api.annotation.download(info.id)
+        gallery.append(info.full_storage_url, ann_info, project_meta, call_update=False)
         print(f"image {i}/{len(image_infos)} added to gallery")
     gallery._update()
     gallery.loading = False
