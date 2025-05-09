@@ -1,3 +1,5 @@
+import base64
+import uuid
 from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
@@ -8,7 +10,7 @@ from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.conversions import common_types as types
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
+from qdrant_client.models import Batch, CollectionInfo, Distance, PointStruct, VectorParams
 
 import src.globals as g
 from src.utils import (
@@ -64,10 +66,57 @@ class SearchResultField:
     SCORES = "scores"
 
 
-import base64
-import uuid
+class ImageReferences:
+    IMAGE_IDS = "image_ids"
+    PROJECT_IDS = "project_ids"
+    DATASET_IDS = "dataset_ids"
 
-from qdrant_client.models import PointStruct
+    def __init__(self, payload: Dict[str, Any]):
+        self.image_ids = payload.get(self.IMAGE_IDS, [])
+        self.project_ids = payload.get(self.PROJECT_IDS, [])
+        self.dataset_ids = payload.get(self.DATASET_IDS, [])
+
+    def update(
+        self,
+        image_ids: Optional[List[int]] = None,
+        project_ids: Optional[List[int]] = None,
+        dataset_ids: Optional[List[int]] = None,
+    ):
+        """Update the references with new values.
+        :param image_id: Image IDs to add.
+        :type image_id: Optional[List[int]], optional
+        :param project_id: Project IDs to add.
+        :type project_id: Optional[List[int]], optional
+        :param dataset_id: Dataset IDs to add.
+        :type dataset_id: Optional[List[int]], optional
+        """
+        if image_ids is None:
+            image_ids = []
+        if project_ids is None:
+            project_ids = []
+        if dataset_ids is None:
+            dataset_ids = []
+        self.image_ids.extend(image_ids)
+        self.project_ids.extend(project_ids)
+        self.dataset_ids.extend(dataset_ids)
+        self.image_ids = list(set(self.image_ids))
+        self.project_ids = list(set(self.project_ids))
+        self.dataset_ids = list(set(self.dataset_ids))
+
+    @classmethod
+    def clear_payload(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Clear the payload from references.
+
+        :param payload: Payload to clear.
+        :type payload: Dict[str, Any]
+        :return: Cleared payload.
+        :rtype: Dict[str, Any]
+        """
+        for field in [cls.IMAGE_IDS, cls.PROJECT_IDS, cls.DATASET_IDS]:
+            if field in payload:
+                del payload[field]
+        return payload
 
 
 def hash_to_uuid(image_hash: str) -> uuid.UUID:
@@ -249,7 +298,7 @@ async def get_items_by_hashes(
         collection_name, point_ids, with_payload=True, with_vectors=with_vectors
     )
     for point in points:
-        point.payload.pop(QdrantFields.REFERENCE_IDS, None)
+        point.payload = ImageReferences.clear_payload(point.payload)
     image_infos = [
         ImageInfoLite(id=None, dataset_id=None, project_id=None, **point.payload)
         for point in points
@@ -279,7 +328,7 @@ async def upsert(
     """
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
-    payloads = get_payloads(image_infos, reference_ids)
+    payloads = prepare_payloads(image_infos, reference_ids)
     ids = [hash_to_uuid(image_info.hash).hex for image_info in image_infos]
     sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
     sly.logger.debug("Upserting %d payloads to collection %s.", len(payloads), collection_name)
@@ -335,7 +384,9 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
 
 
 @timeit
-def _diff(image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]) -> List[ImageInfoLite]:
+def _diff(
+    image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]
+) -> Tuple[List[ImageInfoLite], List[ImageReferences]]:
     """Compare ImageInfoLite objects with points from the collection and return the difference.
     Uses updated_at field to compare points.
     Returns ImageInfoLite objects that need to be updated and reference ids that represent in which projects or datasets
@@ -345,12 +396,13 @@ def _diff(image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]) -> Lis
     :type image_infos: List[ImageInfoLite]
     :param points: A list of dictionaries with points from the collection.
     :type points: List[Dict[str, Any]]
-    :return: A list of ImageInfoLite objects that need to be updated.
-    :rtype: List[ImageInfoLite], List[Dict[str, Any]]
+    :return: A list of ImageInfoLite objects that need to be updated
+            and a list of ImageReferences objects with infromation about Image IDs, Project IDs and Dataset IDs
+            to which the image belongs.
+    :rtype: Tuple[List[ImageInfoLite], List[ImageReferences]]
     """
     # If the point with the same id doesn't exist in the collection, it will be added to the diff.
     # If the point with the same id exsts - check if updated_at is exactly the same, or add to the diff.
-    # Image infos and points have different length, so we need to iterate over image infos.
     diff = []
     refs = []
     points_dict = {point.payload.get(TupleFields.HASH): point for point in points}
@@ -364,17 +416,24 @@ def _diff(image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]) -> Lis
             image_info.updated_at
         ):
             diff.append(image_info)
-            refs.append(point.payload.get(QdrantFields.REFERENCE_IDS))
+            refs.append(ImageReferences(point.payload))
 
     return diff, refs
 
 
 @timeit
-def get_payloads(
-    image_infos: List[ImageInfoLite], references: List[Optional[Dict[str, int]]]
+def prepare_payloads(
+    image_infos: List[ImageInfoLite], references: List[Optional[ImageReferences]]
 ) -> List[Dict[str, Any]]:
-    """Get payloads from ImageInfoLite objects.
-    Converts named tuples to dictionaries and removes the id field.
+    """
+    Prepare payloads for ImageInfoLite objects before upserting to Qdrant.
+    Converts named tuples to dictionaries and removes fields:
+       - ID
+       - PROJECT_ID
+       - DATASET_ID
+       - SCORE
+
+    Adds reference IDs to the payloads.
 
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
@@ -393,17 +452,18 @@ def get_payloads(
     for image_info, reference in zip(image_infos, references):
         payload = {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
         if reference is not None:
-            new_refs = deepcopy(reference)
-            new_refs[QdrantFields.IMAGE_IDS].append(image_info.id)
-            new_refs[QdrantFields.PROJECT_IDS].append(image_info.project_id)
-            new_refs[QdrantFields.DATASET_IDS].append(image_info.dataset_id)
+            reference.update(
+                image_ids=[image_info.id],
+                project_ids=[image_info.project_id],
+                dataset_ids=[image_info.dataset_id],
+            )
+            payload[QdrantFields.IMAGE_IDS] = reference.image_ids
+            payload[QdrantFields.PROJECT_IDS] = reference.project_ids
+            payload[QdrantFields.DATASET_IDS] = reference.dataset_ids
         else:
-            new_refs = {
-                QdrantFields.IMAGE_IDS: [image_info.id],
-                QdrantFields.PROJECT_IDS: [image_info.project_id],
-                QdrantFields.DATASET_IDS: [image_info.dataset_id],
-            }
-        payload[QdrantFields.REFERENCE_IDS] = new_refs
+            payload[QdrantFields.IMAGE_IDS] = [image_info.id]
+            payload[QdrantFields.PROJECT_IDS] = [image_info.project_id]
+            payload[QdrantFields.DATASET_IDS] = [image_info.dataset_id]
         payloads.append(payload)
     return payloads
 
@@ -441,7 +501,7 @@ async def search(
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
 
-    points = await client.search(
+    response = await client.query_points(
         collection_name,
         query_vector,
         query_filter=query_filter,
@@ -449,18 +509,17 @@ async def search(
         with_payload=True,
         with_vectors=return_vectors,
     )
-    result = {
-        "items": [
-            ImageInfoLite(id=None, dataset_id=None, project_id=None, **point.payload)
-            for point in points
-        ]
-    }
-
+    result = {}
+    items = []
+    for point in response.points:
+        payload = ImageReferences.clear_payload(point.payload)
+        items.append(ImageInfoLite(id=None, dataset_id=None, project_id=None, **payload))
+    result["items"] = items
     if return_vectors:
-        result["vectors"] = [point.vector for point in points]
+        result["vectors"] = [point.vector for point in response.points]
 
     if return_scores:
-        result["scores"] = [point.score for point in points]
+        result["scores"] = [point.score for point in response.points]
 
     return result
 

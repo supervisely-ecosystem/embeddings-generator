@@ -19,6 +19,7 @@ from src.search_cache import SearchCache
 from src.utils import (
     EventFields,
     ImageInfoLite,
+    ResponseFields,
     embeddings_up_to_date,
     get_lite_image_infos,
     get_project_info,
@@ -149,14 +150,13 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
     sly.logger.info(
         "Searching for similar images in project %s, limit: %s. Text prompt: %s, Image IDs: %s. "
-        "Search will be perormed by image IDs: %s, dataset ID: %s, project ID: %s.",
+        "Search will be perormed by image IDs: %s, dataset ID: %s.",
         event.project_id,
         event.limit,
         event.prompt,
         event.image_ids,
         event.by_image_ids,
         event.by_dataset_id,
-        event.by_project_id,
     )
 
     settings = {
@@ -164,7 +164,6 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         EventFields.IMAGE_IDS: event.image_ids if event.image_ids else None,
         EventFields.BY_IMAGE_IDS: event.by_image_ids,
         EventFields.BY_DATASET_ID: event.by_dataset_id,
-        EventFields.BY_PROJECT_ID: event.by_project_id,
     }
 
     # Try to get cached results first
@@ -188,7 +187,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             cache.clear()
         else:
             sly.logger.info("Using cached search results")
-            return cache.collection_id
+            return {ResponseFields.COLLECTION_ID: cache.collection_id}
 
     # Collect project images info to use later for mapping.
     image_infos = await image_get_list_async(api, event.project_id)
@@ -253,9 +252,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     elif event.by_dataset_id:
         # If dataset_id is provided, create a filter for the search.
         search_filter = qdrant.get_search_filter(dataset_id=event.by_dataset_id)
-    elif event.by_project_id:
+    else:
         # If project_id is provided, create a filter for the search.
-        search_filter = qdrant.get_search_filter(project_id=event.by_project_id)
+        search_filter = qdrant.get_search_filter(project_id=event.project_id)
 
     for vector, query in zip(query_vectors, queries):
         tasks.append(
@@ -281,12 +280,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         else:
             for i in range(len(items)):
                 items[i].score = None
-        results.append(items)
+        results.extend(items)
         sly.logger.debug("Found %d similar images for a query %s", len(items), query)
 
     # Cache the results before returning them
     collection_id = cache.save(results)
-    return collection_id
+    return {ResponseFields.COLLECTION_ID: collection_id}
 
 
 @app.event(Event.Diverse, use_state=True)

@@ -63,6 +63,7 @@ async def process_images(
         # Get diff of image infos, check if they are already
         # in the Qdrant collection and have the same updated_at field.
         image_infos, references = await qdrant.get_diff(qdrant.IMAGES_COLLECTION, image_infos)
+        #! how to effectively update payload for images if no need to get vectors?
 
     if len(image_infos) == 0:
         logger.debug("All images are up-to-date.")

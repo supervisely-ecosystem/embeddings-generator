@@ -61,15 +61,15 @@ class SearchCache:
 
         """
         collection_items = [
-            CollectionItem(id=info.id, meta=CollectionItem.Meta(score=info.score))
+            CollectionItem(entity_id=info.id, meta=CollectionItem.Meta(score=info.score))
             for info in results
         ]
         self.collection_id = self.api.entities_collection.create(
-            self.project_id,
-            self.cache_collection_name,
-            CollectionType.AI_SEARCH,
-            self.key,
-        )
+            project_id=self.project_id,
+            name=self.cache_collection_name,
+            type=CollectionType.AI_SEARCH,
+            ai_search_key=self.key,
+        ).id
         self.api.entities_collection.add_items(self.collection_id, collection_items)
 
         return self.collection_id

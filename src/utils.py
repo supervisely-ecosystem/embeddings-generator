@@ -76,6 +76,12 @@ class EventFields:
     BY_IMAGE_IDS = "by_image_ids"
 
 
+class ResponseFields:
+    """Fields of the response file."""
+
+    COLLECTION_ID = "collection_id"
+
+
 @dataclass
 class ImageInfoLite:
     id: int
