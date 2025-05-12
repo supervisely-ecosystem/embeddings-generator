@@ -15,11 +15,12 @@ from src.events import Event
 from src.functions import auto_update_all_embeddings, process_images, update_embeddings
 from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
-from src.search_cache import SearchCache
+from src.search_cache import CollectionItem, SearchCache
 from src.utils import (
     EventFields,
     ImageInfoLite,
     ResponseFields,
+    create_collection_and_populate,
     embeddings_up_to_date,
     get_lite_image_infos,
     get_project_info,
@@ -62,26 +63,28 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     api.task.send_request(task_id, "embeddings", data, skip_response=True)
     """
     sly.logger.info(
-        "Started creating embeddings for project %s. Force: %s, Image IDs: %s.",
+        "Started creating embeddings for project %s. Force: %s, Image IDs: %s. Return vectors: %s.",
         event.project_id,
         event.force,
         event.image_ids,
+        event.return_vectors,
     )
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+
     if project_info.embeddings_in_progress:
-        sly.logger.info(
-            "Embeddings creation is already in progress for project %s. Skipping.",
-            event.project_id,
+        message = (
+            f"Embeddings creation is already in progress for project {event.project_id}. Skipping."
         )
-        return
-    if project_info.embeddings_updated_at is not None and parse_timestamp(
-        project_info.embeddings_updated_at
-    ) > parse_timestamp(project_info.updated_at):
-        sly.logger.info(
-            "Embeddings are up to date for project %s. Skipping.",
-            event.project_id,
-        )
-        return
+        sly.logger.info(message)
+        return {ResponseFields.MESSAGE: message}
+    if not event.force:
+        if project_info.embeddings_updated_at is not None and parse_timestamp(
+            project_info.embeddings_updated_at
+        ) >= parse_timestamp(project_info.updated_at):
+            message = f"Embeddings are up to date for project {event.project_id}. Skipping."
+            sly.logger.info(message)
+            return {ResponseFields.MESSAGE: message}
+
     try:
         api.project.set_embeddings_in_progress(event.project_id, True)
         # Step 1: Ensure collection exists in Qdrant.
@@ -108,25 +111,44 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         image_infos = await process_images(api, event.project_id, image_infos=image_infos)
         image_hashes = [info.hash for info in image_infos]
 
-        if event.image_ids is None and len(image_infos) > 0:
+        # if event.image_ids is None and len(image_infos) > 0:
+        if len(image_infos) > 0:
             # Step 4: Update embeddings data.
             # project_info = await get_project_info(api, event.project_id)
             await update_embeddings_data(api, event.project_id)
 
         sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
-        _, vectors = await qdrant.get_items_by_hashes(
-            qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
-        )
-        # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
 
-        sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
-        api.project.set_embeddings_in_progress(event.project_id, False)
-        sly.logger.info(
-            "Embeddings creation for project %s has been completed. %d images processed.",
-            event.project_id,
-            len(image_infos),
-        )
-        return [info.to_json for info in image_infos], vectors
+        if event.return_vectors:
+            _, vectors = await qdrant.get_items_by_hashes(
+                qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
+            )
+            # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+
+            sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
+            api.project.set_embeddings_in_progress(event.project_id, False)
+            sly.logger.info(
+                "Embeddings creation for project %s has been completed. %d images processed.",
+                event.project_id,
+                len(image_infos),
+            )
+            # collection_id = await create_collection_and_populate(
+            #     api=api,
+            #     project_id=event.project_id,
+            #     name=f"Embeddings for {event.project_id}",
+            #     image_ids=[info.id for info in image_infos],
+            #     event=EventFields.EMBEDDINGS,
+            # )
+            api.project.set_embeddings_in_progress(event.project_id, False)
+            return {
+                # ResponseFields.COLLECTION_ID: collection_id,
+                ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
+                ResponseFields.VECTORS: vectors,
+            }
+        else:
+            return {
+                ResponseFields.MESSAGE: f"Embeddings creation for project {event.project_id} has been completed. "
+            }
     except Exception as e:
         sly.logger.error(
             "Error while creating embeddings for project %s: %s", event.project_id, str(e)
@@ -142,28 +164,28 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # 1. Search for similar images using text prompt.
     # data = {"project_id": <your-project-id>, "limit": <limit>, "prompt": <text-prompt>}
     # 2. Search for similar images using image IDs.
-    # data = {"project_id": <your-project-id>, "limit": <limit>, "image_ids": [<image-id-1>, <image-id-2>, ...]}
+    # data = {"project_id": <your-project-id>, "limit": <limit>, "by_image_ids": [<image-id-1>, <image-id-2>, ...]}
     # 3. Both text prompt and image IDs can be provided at the same time.
     # response =api.task.send_request(task_id, "search", data) # Do not skip response.
     # returns a list of ImageInfoLite objects for each query.
     # response: List[List[Dict]]
 
     sly.logger.info(
-        "Searching for similar images in project %s, limit: %s. Text prompt: %s, Image IDs: %s. "
+        "Searching for similar images in project %s, limit: %s. Prompts: text - %s, Image IDs - %s. "
         "Search will be performed by image IDs: %s, dataset ID: %s.",
         event.project_id,
         event.limit,
         event.prompt,
-        event.image_ids,
         event.by_image_ids,
-        event.by_dataset_id,
+        event.image_ids,
+        event.dataset_id,
     )
 
     settings = {
         EventFields.LIMIT: event.limit,
-        EventFields.IMAGE_IDS: event.image_ids if event.image_ids else None,
-        EventFields.BY_IMAGE_IDS: event.by_image_ids,
-        EventFields.BY_DATASET_ID: event.by_dataset_id,
+        EventFields.BY_IMAGE_IDS: event.by_image_ids if event.by_image_ids else None,
+        EventFields.IMAGE_IDS: event.image_ids,
+        EventFields.DATASET_ID: event.dataset_id,
     }
 
     # Try to get cached results first
@@ -172,12 +194,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     )
     cache = SearchCache(api, event.project_id, prompt_str, settings)
 
-    if cache.collection_id is not None and cache.timestamp is not None:
+    if cache.collection_id is not None and cache.updated_at is not None:
         if cache.project_info.embeddings_updated_at is None:
             # If the project has no embeddings, invalidate the cache.
             sly.logger.info("Project %s has no embeddings. Invalidating cache.", event.project_id)
             cache.clear()
-        elif parse_timestamp(cache.timestamp) < parse_timestamp(
+        elif parse_timestamp(cache.updated_at) < parse_timestamp(
             cache.project_info.embeddings_updated_at
         ):
             # If the cache is older than the project update timestamp, invalidate it.
@@ -191,6 +213,8 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
     # Collect project images info to use later for mapping.
     image_infos = await image_get_list_async(api, event.project_id)
+    if image_infos is None or len(image_infos) == 0:
+        return {ResponseFields.MESSAGE: "Project is empty."}
 
     text_prompts = []
     if event.prompt:
@@ -204,8 +228,8 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
     image_urls = []
     # If request contains image IDs, get image URLs to add to the query.
-    if event.image_ids:
-        filtered_image_infos = [info for info in image_infos if info.id in event.image_ids]
+    if event.by_image_ids:
+        filtered_image_infos = [info for info in image_infos if info.id in event.by_image_ids]
         lite_image_infos = await get_lite_image_infos(
             api,
             cas_size=g.IMAGE_SIZE_FOR_CAS,
@@ -246,12 +270,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
     search_filter = None
 
-    if event.by_image_ids:
+    if event.image_ids:
         # If image_ids are provided, create a filter for the search.
-        search_filter = qdrant.get_search_filter(image_ids=event.by_image_ids)
-    elif event.by_dataset_id:
+        search_filter = qdrant.get_search_filter(image_ids=event.image_ids)
+    elif event.dataset_id:
         # If dataset_id is provided, create a filter for the search.
-        search_filter = qdrant.get_search_filter(dataset_id=event.by_dataset_id)
+        search_filter = qdrant.get_search_filter(dataset_id=event.dataset_id)
     else:
         # If project_id is provided, create a filter for the search.
         search_filter = qdrant.get_search_filter(project_id=event.project_id)
@@ -309,9 +333,14 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         event.project_id,
         event.method,
         event.sample_size,
+        event.dataset_id,
+        event.image_ids,
     )
+
     if event.image_ids:
         image_infos = await image_get_list_async(api, event.project_id, images_ids=event.image_ids)
+    elif event.dataset_id:
+        image_infos = await image_get_list_async(api, event.project_id, dataset_id=event.dataset_id)
     else:
         image_infos = await image_get_list_async(api, event.project_id)
     image_hashes = [info.hash for info in image_infos]
@@ -332,11 +361,22 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     result = []
     sly.logger.debug("Generated diverse samples: %s", samples)
     for label, sample in samples.items():
-        result.extend([image_infos_result[i].to_json() for i in sample])
+        result.extend([image_infos_result[i].id for i in sample])
 
     sly.logger.debug("Generated %d diverse images.", len(result))
 
-    return result
+    if len(result) == 0:
+        return {ResponseFields.MESSAGE: "No diverse images found."}
+
+    # Delete existing collection items if any and create a new collection for the diverse population.
+    collection_id = await create_collection_and_populate(
+        api=api,
+        project_id=event.project_id,
+        name=f"Diverse Population for {event.project_id}",
+        event=EventFields.DIVERSE,
+        image_ids=result,
+    )
+    return {ResponseFields.COLLECTION_ID: collection_id}
 
 
 @app.event(Event.Projections, use_state=True)

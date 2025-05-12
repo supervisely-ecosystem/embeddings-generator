@@ -63,8 +63,9 @@ def draw_all_projections(project_id):
         r = api.task.send_request(
             embeddings_generator_task_id,
             "embeddings",
-            data={"project_id": project_id, "force": False},
+            data={"project_id": project_id, "force": False, "return_vectors": False},
         )
+        image_ids = r.get("image_ids")
     except:
         pass
 
@@ -263,13 +264,14 @@ def draw_diverse(project_id, sample_size):
         "diverse",
         data={"project_id": project_id, "method": "random", "sample_size": sample_size},
     )
-    image_infos = r
+    image_collection_id = r.get("collection_id")
+    image_infos = api.entities_collection.get_items(image_collection_id)
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
     print("Init bokeh widget")
 
-    this_ids = set([info["id"] for info in image_infos])
+    this_ids = set([info.id for info in image_infos])
     bokeh.clear()
     plot = Bokeh.Circle(
         x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
@@ -295,8 +297,8 @@ def draw_diverse(project_id, sample_size):
     gallery.clean_up()
     project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
     for i, info in enumerate(image_infos, 1):
-        ann_info = api.annotation.download(info["id"])
-        gallery.append(info["full_url"], ann_info, project_meta, call_update=False)
+        ann_info = api.annotation.download(info.id)
+        gallery.append(info.full_storage_url, ann_info, project_meta, call_update=False)
         print(f"image {i}/{len(image_infos)} added to gallery")
     gallery._update()
     gallery.loading = False

@@ -1,10 +1,8 @@
 import asyncio
 import base64
 import datetime
-import os
-import shutil
-import tempfile
-from collections import namedtuple
+import hashlib
+import json
 from dataclasses import dataclass
 from functools import partial, wraps
 from time import perf_counter
@@ -12,6 +10,7 @@ from typing import Callable, Dict, List, Optional
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 
@@ -66,6 +65,7 @@ class EventFields:
     REDUCTION_DIMENSIONS = "reduction_dimensions"
     SAMPLE_SIZE = "sample_size"
     SAVE = "save"
+    RETURN_VECTORS = "return_vectors"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"
@@ -75,11 +75,20 @@ class EventFields:
     BY_DATASET_ID = "by_dataset_id"
     BY_IMAGE_IDS = "by_image_ids"
 
+    # Event types
+    SEARCH = "search"
+    DIVERSE = "diverse"
+    CLUSTERING = "clustering"
+    EMBEDDINGS = "embeddings"
+
 
 class ResponseFields:
     """Fields of the response file."""
 
     COLLECTION_ID = "collection_id"
+    MESSAGE = "message"
+    VECTORS = "vectors"
+    IMAGE_IDS = "image_ids"
 
 
 @dataclass
@@ -759,3 +768,81 @@ def update_id_by_hash(
             )
 
     return target_infos
+
+
+def get_key(prompt: str, project_id: str, settings: Dict) -> str:
+    """
+    Generate a unique hash key for a search request.
+
+    :param prompt: Prompt for the search request.
+    :type prompt: str
+    :param project_id: ID of the project.
+    :type project_id: str
+    :param settings: Settings for the search request.
+    :type settings: Dict
+    :return: Unique hash key for the search request.
+    :rtype: str
+    """
+    cache_data = {"prompt": prompt, "project_id": project_id, "settings": settings}
+    serialized = json.dumps(cache_data, sort_keys=True)
+    return hashlib.md5(serialized.encode()).hexdigest()
+
+
+@to_thread
+def create_collection_and_populate(
+    api: sly.Api,
+    project_id: int,
+    name: str,
+    image_ids: List[int],
+    event: EventFields,
+    collection_type: str = CollectionType.AI_SEARCH,
+    ai_search_key: str = None,
+) -> int:
+    """Create a collection in the project.
+
+    **NOTE**: For events CLUSTERING, DIVERSE, and EMBEDDINGS, collection will be recreated if it already exists.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param project_id: ID of the project to create collection in.
+    :type project_id: int
+    :param name: Name of the collection.
+    :type name: str
+    :param image_ids: List of image IDs to populate the collection.
+    :type image_ids: List[int]
+    :param event: Event type to determine default AI Search key.
+                For diverse and clustering search, AI Search key will be the same and automatically generated inside this function.
+                For prompt search, must be generated and passed to the function.
+    :type event: EventFields
+    :param collection_type: Type of the collection.
+    :type collection_type: str
+    :param ai_search_key: AI search key for the collection.
+    :type ai_search_key: str, optional
+    :return: ID of the created collection.
+    :rtype: int
+    """
+    if event in [EventFields.DIVERSE, EventFields.CLUSTERING, EventFields.EMBEDDINGS]:
+        # Generate AI search key for diverse and clustering search which will be the same
+        ai_search_key = get_key(event, project_id, {"event": event})
+
+        # Remove existing collection with the same AI search key
+        while True:
+            collection_info = api.entities_collection.get_info_by_ai_search_key(
+                project_id, ai_search_key
+            )
+            if collection_info is None:
+                break
+            api.entities_collection.remove(collection_info.id)
+
+    collection_id = api.entities_collection.create(
+        project_id=project_id,
+        name=name,
+        type=collection_type,
+        ai_search_key=ai_search_key,
+    ).id
+    items = [
+        CollectionItem(entity_id=image_id, meta=CollectionItem.Meta(score=1))
+        for image_id in image_ids
+    ]
+    api.entities_collection.add_items(collection_id, items)
+    return collection_id

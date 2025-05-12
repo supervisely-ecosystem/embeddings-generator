@@ -7,10 +7,17 @@ class Event:
     class Embeddings:
         endpoint = "/embeddings"
 
-        def __init__(self, project_id: int, force: Optional[bool], image_ids: Optional[List[int]]):
+        def __init__(
+            self,
+            project_id: int,
+            force: Optional[bool],
+            image_ids: Optional[List[int]],
+            return_vectors: Optional[bool] = False,
+        ):
             self.project_id = project_id
             self.force = force
             self.image_ids = image_ids
+            self.return_vectors = return_vectors
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -18,9 +25,19 @@ class Event:
                 data.get(EventFields.PROJECT_ID),
                 data.get(EventFields.FORCE),
                 data.get(EventFields.IMAGE_IDS),
+                data.get(EventFields.RETURN_VECTORS),
             )
 
     class Search:
+        """
+        Could be used for searching images by prompt or by image IDs.
+        To search by image IDs, use the `by_image_ids` parameter.
+
+        To limit selection by image IDs or dataset ID, use the corresponding parameters.
+        If both image_ids and dataset_id are provided, the search will be limited to the specified images.
+
+        """
+
         endpoint = "/search"
 
         def __init__(
@@ -28,16 +45,16 @@ class Event:
             project_id: int,
             limit: Optional[int] = None,
             prompt: Optional[str] = None,
-            image_ids: Optional[List[int]] = None,
-            by_dataset_id: Optional[int] = None,
             by_image_ids: Optional[List[int]] = None,
+            image_ids: Optional[List[int]] = None,
+            dataset_id: Optional[int] = None,
         ):
             self.project_id = project_id
             self.limit = limit
             self.prompt = prompt
-            self.image_ids = image_ids
-            self.by_dataset_id = by_dataset_id
             self.by_image_ids = by_image_ids
+            self.image_ids = image_ids
+            self.dataset_id = dataset_id
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -45,12 +62,17 @@ class Event:
                 data.get(EventFields.PROJECT_ID),
                 data.get(EventFields.LIMIT),
                 data.get(EventFields.PROMPT),
-                data.get(EventFields.IMAGE_IDS),
-                data.get(EventFields.BY_DATASET_ID),
                 data.get(EventFields.BY_IMAGE_IDS),
+                data.get(EventFields.IMAGE_IDS),
+                data.get(EventFields.DATASET_ID),
             )
 
     class Diverse:
+        """
+        To limit selection by image IDs or dataset ID, use the corresponding parameters.
+        If both image_ids and dataset_id are provided, the search will be limited to the specified images.
+        """
+
         endpoint = "/diverse"
 
         def __init__(
@@ -58,12 +80,14 @@ class Event:
             project_id: int,
             method: str,
             sample_size: int,
-            image_ids: List[int],
+            image_ids: Optional[List[int]] = None,
+            dataset_id: Optional[int] = None,
         ):
             self.project_id = project_id
             self.method = method
             self.sample_size = sample_size
             self.image_ids = image_ids
+            self.dataset_id = dataset_id
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -72,6 +96,7 @@ class Event:
                 data.get(EventFields.METHOD, "random"),
                 data.get(EventFields.SAMPLE_SIZE),
                 data.get(EventFields.IMAGE_IDS),
+                data.get(EventFields.DATASET_ID),
             )
 
     class Projections:
