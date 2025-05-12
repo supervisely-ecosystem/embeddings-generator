@@ -10,8 +10,7 @@ from typing import Callable, Dict, List, Optional
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import (CollectionItem,
-                                                     CollectionType)
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 
@@ -531,7 +530,7 @@ async def image_get_list_async(
     async def _get_all_pages(batch_filters):
         page_data = base_data.copy()
         if batch_filters:
-            page_data[ApiField.FILTERS] = batch_filters
+            page_data[ApiField.FILTER] = batch_filters
         page_data[ApiField.PAGE] = 1
 
         async with semaphore:
