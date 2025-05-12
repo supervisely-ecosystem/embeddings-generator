@@ -6,6 +6,7 @@ import numpy as np
 import supervisely as sly
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from supervisely.imaging.color import get_predefined_colors
 
 import src.cas as cas
@@ -21,6 +22,7 @@ from src.utils import (
     EventFields,
     ImageInfoLite,
     ResponseFields,
+    ResponseStatus,
     SamplingMethods,
     create_collection_and_populate,
     embeddings_up_to_date,
@@ -31,7 +33,7 @@ from src.utils import (
     run_safe,
     send_request,
     timeit,
-    update_embeddings_data,
+    update_embeddings_updated_at,
     update_id_by_hash,
 )
 from src.visualization import (
@@ -53,6 +55,9 @@ if sly.is_development():
     sly.app.development.enable_advanced_debug()
 
 
+asyncio.gather(qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION))
+
+
 @app.event(Event.Embeddings, use_state=True)
 @timeit
 async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
@@ -65,11 +70,12 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     api.task.send_request(task_id, "embeddings", data, skip_response=True)
     """
     sly.logger.info(
-        "Started creating embeddings for project %s. Force: %s, Image IDs: %s. Return vectors: %s.",
-        event.project_id,
-        event.force,
-        event.image_ids,
-        event.return_vectors,
+        f"Started creating embeddings for project {event.project_id}",
+        extra={
+            "force": event.force,
+            "return_vectors": event.return_vectors,
+            "image_ids": event.image_ids,
+        },
     )
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
 
@@ -78,85 +84,102 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             f"Embeddings creation is already in progress for project {event.project_id}. Skipping."
         )
         sly.logger.info(message)
-        return {ResponseFields.MESSAGE: message}
+        return JSONResponse({ResponseFields.MESSAGE: message})
     if not event.force:
         if project_info.embeddings_updated_at is not None and parse_timestamp(
             project_info.embeddings_updated_at
         ) >= parse_timestamp(project_info.updated_at):
             message = f"Embeddings are up to date for project {event.project_id}. Skipping."
             sly.logger.info(message)
-            return {ResponseFields.MESSAGE: message}
+            return JSONResponse({ResponseFields.MESSAGE: message})
 
-    try:
-        api.project.set_embeddings_in_progress(event.project_id, True)
-        # Step 1: Ensure collection exists in Qdrant.
-        await qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION)
+    async def execute():
+        try:
+            api.project.set_embeddings_in_progress(event.project_id, True)
 
-        if event.image_ids:
-            image_infos = await image_get_list_async(
-                api, event.project_id, images_ids=event.image_ids
-            )
-        else:
-            image_infos = await image_get_list_async(api, event.project_id)
+            if event.image_ids:
+                image_infos = await image_get_list_async(
+                    api, event.project_id, images_ids=event.image_ids
+                )
+            else:
+                image_infos = await image_get_list_async(api, event.project_id)
 
-        # Step 2: If force is True, delete existing collection items.
-        if event.force:
+            # Step 2: If force is True, delete existing collection items.
+            if event.force:
+                image_hashes = [info.hash for info in image_infos]
+                sly.logger.debug(
+                    "Force enabled for project %s, will recreate items in collection %s.",
+                    event.project_id,
+                    qdrant.IMAGES_COLLECTION,
+                )
+                await qdrant.delete_collection_items(image_hashes)
+
+            # Step 3: Process images.
+            image_infos = await process_images(api, event.project_id, image_infos=image_infos)
             image_hashes = [info.hash for info in image_infos]
-            sly.logger.debug(
-                "Force enabled for project %s, will recreate items in collection %s.",
-                event.project_id,
-                qdrant.IMAGES_COLLECTION,
+
+            # if event.image_ids is None and len(image_infos) > 0:
+            if len(image_infos) > 0:
+                # Step 4: Update embeddings data.
+                # project_info = await get_project_info(api, event.project_id)
+                await update_embeddings_updated_at(api, event.project_id)
+
+            sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
+
+            if event.return_vectors:
+                _, vectors = await qdrant.get_items_by_hashes(
+                    qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
+                )
+                # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+
+                sly.logger.debug(
+                    "Got %d image infos and %d vectors.", len(image_infos), len(vectors)
+                )
+                sly.logger.info(
+                    "Embeddings creation for project %s has been completed. %d images processed.",
+                    event.project_id,
+                    len(image_infos),
+                )
+                # collection_id = await create_collection_and_populate(
+                #     api=api,
+                #     project_id=event.project_id,
+                #     name=f"Embeddings for {event.project_id}",
+                #     image_ids=[info.id for info in image_infos],
+                #     event=EventFields.EMBEDDINGS,
+                # )
+                api.project.set_embeddings_in_progress(event.project_id, False)
+                return JSONResponse(
+                    {
+                        # ResponseFields.COLLECTION_ID: collection_id,
+                        ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
+                        ResponseFields.VECTORS: vectors,
+                    }
+                )
+            else:
+                api.project.set_embeddings_in_progress(event.project_id, False)
+                message = f"Embeddings creation for project {event.project_id} has been completed."
+                sly.logger.info(message)
+                return JSONResponse({ResponseFields.MESSAGE: message})
+        except Exception as e:
+            sly.logger.error(
+                "Error while creating embeddings for project %s: %s", event.project_id, str(e)
             )
-            await qdrant.delete_collection_items(image_hashes)
-
-        # Step 3: Process images.
-        image_infos = await process_images(api, event.project_id, image_infos=image_infos)
-        image_hashes = [info.hash for info in image_infos]
-
-        # if event.image_ids is None and len(image_infos) > 0:
-        if len(image_infos) > 0:
-            # Step 4: Update embeddings data.
-            # project_info = await get_project_info(api, event.project_id)
-            await update_embeddings_data(api, event.project_id)
-
-        sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
-
-        if event.return_vectors:
-            _, vectors = await qdrant.get_items_by_hashes(
-                qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
-            )
-            # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
-
-            sly.logger.debug("Got %d image infos and %d vectors.", len(image_infos), len(vectors))
             api.project.set_embeddings_in_progress(event.project_id, False)
-            sly.logger.info(
-                "Embeddings creation for project %s has been completed. %d images processed.",
-                event.project_id,
-                len(image_infos),
+            return JSONResponse(
+                {
+                    ResponseFields.MESSAGE: f"Error while creating embeddings for project {event.project_id}: {str(e)}"
+                }
             )
-            # collection_id = await create_collection_and_populate(
-            #     api=api,
-            #     project_id=event.project_id,
-            #     name=f"Embeddings for {event.project_id}",
-            #     image_ids=[info.id for info in image_infos],
-            #     event=EventFields.EMBEDDINGS,
-            # )
-            api.project.set_embeddings_in_progress(event.project_id, False)
-            return {
-                # ResponseFields.COLLECTION_ID: collection_id,
-                ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
-                ResponseFields.VECTORS: vectors,
-            }
-        else:
-            return {
-                ResponseFields.MESSAGE: f"Embeddings creation for project {event.project_id} has been completed. "
-            }
-    except Exception as e:
-        sly.logger.error(
-            "Error while creating embeddings for project %s: %s", event.project_id, str(e)
-        )
-        api.project.set_embeddings_in_progress(event.project_id, False)
-        raise e
+
+    task_id = f"embeddings_{event.project_id}_{datetime.datetime.now().timestamp()}"
+    task = asyncio.create_task(execute())
+    g.background_tasks[task_id] = task
+    return JSONResponse(
+        {
+            ResponseFields.MESSAGE: "Embeddings creation started.",
+            ResponseFields.BACKGROUND_TASK_ID: task_id,
+        }
+    )
 
 
 @app.event(Event.Search, use_state=True)
@@ -173,14 +196,14 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # response: List[List[Dict]]
 
     sly.logger.info(
-        "Searching for similar images in project %s, limit: %s. Prompts: text - %s, Image IDs - %s. "
-        "Search will be performed by image IDs: %s, dataset ID: %s.",
-        event.project_id,
-        event.limit,
-        event.prompt,
-        event.by_image_ids,
-        event.image_ids,
-        event.dataset_id,
+        f"Searching for similar images in project {event.project_id}",
+        extra={
+            "prompt": event.prompt,
+            "by_image_ids": event.by_image_ids,
+            "limit": event.limit,
+            "image_ids": event.image_ids,
+            "dataset_id": event.dataset_id,
+        },
     )
 
     settings = {
@@ -507,6 +530,44 @@ async def projections_up_to_date_endpoint(request: Request):
     state = request.state.state
     project_id = state["project_id"]
     return await is_projections_up_to_date(g.api, project_id)
+
+
+@server.post("/check_background_task_status")
+async def check_task_status(request: Request):
+    try:
+        req_data = await request.json()
+        task_id = req_data.get("task_id")
+
+        if not task_id or task_id not in g.background_tasks:
+            return JSONResponse(
+                {
+                    ResponseFields.STATUS: ResponseStatus.NOT_FOUND,
+                    ResponseFields.MESSAGE: f"Task with ID {task_id} not found",
+                }
+            )
+
+        task = g.background_tasks[task_id]
+
+        if task.done():
+            # Get the result and clean up
+            result = task.result()
+            # Optionally remove the task from active_tasks to free memory
+            # del g.active_tasks[task_id]  # Uncomment if you want to clean up
+            return JSONResponse(
+                {ResponseFields.STATUS: ResponseStatus.COMPLETED, ResponseFields.RESULT: result}
+            )
+        else:
+            return JSONResponse(
+                {
+                    ResponseFields.STATUS: ResponseStatus.IN_PROGRESS,
+                    ResponseFields.MESSAGE: "Task is still running",
+                }
+            )
+
+    except Exception as e:
+        return JSONResponse(
+            {ResponseFields.STATUS: ResponseStatus.ERROR, ResponseFields.MESSAGE: str(e)}
+        )
 
 
 scheduler = AsyncIOScheduler(

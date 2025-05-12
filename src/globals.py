@@ -53,3 +53,5 @@ UPDATE_EMBEDDINGS_INTERVAL = update_interval  # minutes, default is 10
 
 sly.logger.debug("Image size for CAS: %s", IMAGE_SIZE_FOR_CAS)
 sly.logger.debug("Update embeddings interval: %s", UPDATE_EMBEDDINGS_INTERVAL)
+
+background_tasks = {}

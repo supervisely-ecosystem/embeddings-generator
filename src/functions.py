@@ -17,7 +17,7 @@ from src.utils import (
     get_team_info,
     parse_timestamp,
     timeit,
-    update_embeddings_data,
+    update_embeddings_updated_at,
 )
 
 
@@ -58,12 +58,13 @@ async def process_images(
         image_infos=image_infos,
     )
 
-    await qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION)
-    if await qdrant.collection_exists(qdrant.IMAGES_COLLECTION):
-        # Get diff of image infos, check if they are already
-        # in the Qdrant collection and have the same updated_at field.
-        image_infos, references = await qdrant.get_diff(qdrant.IMAGES_COLLECTION, image_infos)
-        #! how to effectively update payload for images if no need to get vectors?
+    # await qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION)
+    # if await qdrant.collection_exists(qdrant.IMAGES_COLLECTION):
+    
+    # Get diff of image infos, check if they are already
+    # in the Qdrant collection and have the same updated_at field.
+    image_infos, references = await qdrant.get_diff(qdrant.IMAGES_COLLECTION, image_infos)
+    #! how to effectively update payload for images if no need to get vectors?
 
     if len(image_infos) == 0:
         logger.debug("All images are up-to-date.")
@@ -140,7 +141,7 @@ async def update_embeddings(
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
     if len(image_infos) > 0:
-        await update_embeddings_data(api, project_id)
+        await update_embeddings_updated_at(api, project_id)
 
 
 @timeit

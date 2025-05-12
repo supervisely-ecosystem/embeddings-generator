@@ -104,8 +104,21 @@ class ResponseFields:
 
     COLLECTION_ID = "collection_id"
     MESSAGE = "message"
+    STATUS = "status"
     VECTORS = "vectors"
     IMAGE_IDS = "image_ids"
+    BACKGROUND_TASK_ID = "background_task_id"
+    RESULT = "result"
+
+
+class ResponseStatus:
+    """Status of the response."""
+
+    SUCCESS = "success"
+    COMPLETED = "completed"
+    ERROR = "error"
+    IN_PROGRESS = "in_progress"
+    NOT_FOUND = "not_found"
 
 
 @dataclass
@@ -366,7 +379,7 @@ def get_pcd_by_name(
 
 @to_thread
 @timeit
-def update_embeddings_data(api: sly.Api, project_id: int, timestamp: str = None):
+def update_embeddings_updated_at(api: sly.Api, project_id: int, timestamp: str = None):
     return api.project.set_embeddings_updated_at(project_id, timestamp)
 
 

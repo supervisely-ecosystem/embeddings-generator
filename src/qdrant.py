@@ -345,6 +345,7 @@ async def upsert(
 
 
 @with_retries()
+@timeit
 async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> List[ImageInfoLite]:
     """Get the difference between ImageInfoLite objects and points from the collection.
     Returns ImageInfoLite objects that need to be updated.
