@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from src.utils import EventFields
+from src.utils import ClusteringMethods, EventFields, SamplingMethods
 
 
 class Event:
@@ -78,14 +78,18 @@ class Event:
         def __init__(
             self,
             project_id: int,
-            method: str,
+            sampling_method: str,
             sample_size: int,
+            clustering_method: str,
+            num_clusters: Optional[int] = None,
             image_ids: Optional[List[int]] = None,
             dataset_id: Optional[int] = None,
         ):
             self.project_id = project_id
-            self.method = method
+            self.sampling_method = sampling_method
             self.sample_size = sample_size
+            self.clustering_method = clustering_method
+            self.num_clusters = num_clusters
             self.image_ids = image_ids
             self.dataset_id = dataset_id
 
@@ -93,8 +97,10 @@ class Event:
         def from_json(cls, data: Dict[str, Any]):
             return cls(
                 data.get(EventFields.PROJECT_ID),
-                data.get(EventFields.METHOD, "random"),
+                data.get(EventFields.SAMPLING_METHOD, SamplingMethods.RANDOM),
                 data.get(EventFields.SAMPLE_SIZE),
+                data.get(EventFields.CLUSTERING_METHOD, ClusteringMethods.DBSCAN),
+                data.get(EventFields.NUM_CLUSTERS, 8),
                 data.get(EventFields.IMAGE_IDS),
                 data.get(EventFields.DATASET_ID),
             )

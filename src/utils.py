@@ -10,7 +10,8 @@ from typing import Callable, Dict, List, Optional
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
 
@@ -63,7 +64,10 @@ class EventFields:
     LIMIT = "limit"
     METHOD = "method"
     REDUCTION_DIMENSIONS = "reduction_dimensions"
+    SAMPLING_METHOD = "sampling_method"
     SAMPLE_SIZE = "sample_size"
+    CLUSTERING_METHOD = "clustering_method"
+    NUM_CLUSTERS = "num_clusters"
     SAVE = "save"
     RETURN_VECTORS = "return_vectors"
 
@@ -80,6 +84,20 @@ class EventFields:
     DIVERSE = "diverse"
     CLUSTERING = "clustering"
     EMBEDDINGS = "embeddings"
+
+
+class SamplingMethods:
+    """Sampling methods for the images."""
+
+    RANDOM = "random"
+    CENTROIDS = "centroids"
+
+
+class ClusteringMethods:
+    """Clustering methods for the images."""
+
+    KMEANS = "kmeans"
+    DBSCAN = "dbscan"
 
 
 class ResponseFields:

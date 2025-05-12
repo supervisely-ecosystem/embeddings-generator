@@ -63,7 +63,7 @@ def draw_all_projections(project_id):
         r = api.task.send_request(
             embeddings_generator_task_id,
             "embeddings",
-            data={"project_id": project_id, "force": False, "return_vectors": False},
+            data={"project_id": project_id, "force": False, "return_vectors": True},
         )
         image_ids = r.get("image_ids")
     except:
@@ -262,7 +262,12 @@ def draw_diverse(project_id, sample_size):
     r = api.task.send_request(
         embeddings_generator_task_id,
         "diverse",
-        data={"project_id": project_id, "method": "random", "sample_size": sample_size},
+        data={
+            "project_id": project_id,
+            "sampling_method": "random",
+            "sample_size": sample_size,
+            "clustering_method": "kmeans",
+        },
     )
     image_collection_id = r.get("collection_id")
     image_infos = api.entities_collection.get_items(image_collection_id)

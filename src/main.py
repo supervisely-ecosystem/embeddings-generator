@@ -17,9 +17,11 @@ from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
 from src.search_cache import CollectionItem, SearchCache
 from src.utils import (
+    ClusteringMethods,
     EventFields,
     ImageInfoLite,
     ResponseFields,
+    SamplingMethods,
     create_collection_and_populate,
     embeddings_up_to_date,
     get_lite_image_infos,
@@ -329,12 +331,15 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     """
 
     sly.logger.info(
-        "Generating diverse population for project %s. Method: %s, Limit: %s.",
-        event.project_id,
-        event.method,
-        event.sample_size,
-        event.dataset_id,
-        event.image_ids,
+        f"Generating diverse population for project {event.project_id}.",
+        extra={
+            "sampling_method": event.sampling_method,
+            "sample_size": event.sample_size,
+            "clustering_method": event.clustering_method,
+            "num_clusters": event.num_clusters,
+            "dataset_id": event.dataset_id,
+            "image_ids": event.image_ids,
+        },
     )
 
     if event.image_ids:
@@ -353,8 +358,16 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     data = {
         "vectors": vectors,
         "sample_size": event.sample_size,
-        "method": event.method,
+        "sampling_method": event.sampling_method,
     }
+    if event.clustering_method == ClusteringMethods.KMEANS:
+        data["settings"] = {
+            "num_clusters": event.num_clusters,
+            "clustering_method": event.clustering_method,
+        }
+    elif event.clustering_method == ClusteringMethods.DBSCAN:
+        data["settings"] = {"clustering_method": event.clustering_method}
+
     samples = await send_request(
         api, task_id=g.projections_service_task_id, method="diverse", data=data
     )
