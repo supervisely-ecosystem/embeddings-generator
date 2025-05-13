@@ -478,6 +478,7 @@ async def search(
     query_filter: Optional[types.Filter] = None,
     return_vectors: bool = False,
     return_scores: bool = True,
+    score_threshold: Optional[float] = None,
 ) -> Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]:
     """Search for similar items in the collection based on the query vector.
     If return_vectors is True, returns vectors along with ImageInfoLite objects.
@@ -496,6 +497,8 @@ async def search(
     :type return_vectors: bool, optional
     :param return_scores: Whether to return scores along with ImageInfoLite objects, defaults to True.
     :type return_scores: bool, optional
+    :param score_threshold: The threshold for scores, defaults to None.
+    :type score_threshold: Optional[float], optional
     :return: A dictionary with keys "items", "vectors" and "scores".
     :rtype: Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]
     """
@@ -509,6 +512,7 @@ async def search(
         limit=limit,
         with_payload=True,
         with_vectors=return_vectors,
+        score_threshold=score_threshold,
     )
     result = {}
     items = []

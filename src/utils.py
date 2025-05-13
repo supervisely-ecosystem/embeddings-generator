@@ -69,6 +69,7 @@ class EventFields:
     NUM_CLUSTERS = "num_clusters"
     SAVE = "save"
     RETURN_VECTORS = "return_vectors"
+    THRESHOLD = "threshold"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"

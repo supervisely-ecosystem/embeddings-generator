@@ -123,6 +123,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 # Step 4: Update embeddings data.
                 # project_info = await get_project_info(api, event.project_id)
                 await update_embeddings_updated_at(api, event.project_id)
+                #! delete all ai search collections from cache and update datetime every run
 
             sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
 
@@ -203,6 +204,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             "limit": event.limit,
             "image_ids": event.image_ids,
             "dataset_id": event.dataset_id,
+            "threshold": event.threshold,
         },
     )
 
@@ -211,6 +213,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         EventFields.BY_IMAGE_IDS: event.by_image_ids if event.by_image_ids else None,
         EventFields.IMAGE_IDS: event.image_ids,
         EventFields.DATASET_ID: event.dataset_id,
+        EventFields.THRESHOLD: event.threshold,
     }
 
     # Try to get cached results first
@@ -279,7 +282,6 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         len(query_vectors),
     )
 
-    results = []
     tasks = []
 
     async def _search_task(collection: int, vector: np.ndarray, limit: int, query_filter, query):
@@ -289,6 +291,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 query_vector=vector,
                 limit=limit,
                 query_filter=query_filter,
+                score_threshold=event.threshold,
             ),
             query,
         )
@@ -318,9 +321,13 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             )
         )
 
+    results = []
     for task in asyncio.as_completed(tasks):
         search_results, query = await task
         items = search_results[qdrant.SearchResultField.ITEMS]
+        if len(items) == 0:
+            sly.logger.debug("No similar images found for query %s", query)
+            continue
         items = update_id_by_hash(image_infos, items)
         # items = [info.to_json() for info in items]
         if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
@@ -331,7 +338,8 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 items[i].score = None
         results.extend(items)
         sly.logger.debug("Found %d similar images for a query %s", len(items), query)
-
+    if len(results) == 0:
+        return {ResponseFields.MESSAGE: "No similar images found."}
     # Cache the results before returning them
     collection_id = cache.save(results)
     return {ResponseFields.COLLECTION_ID: collection_id}
@@ -466,6 +474,15 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
 
 @app.event(Event.Clusters, use_state=True)
 async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
+
+    sly.logger.info(
+        f"Generating clusters for project {event.project_id}.",
+        extra={
+            "reduction_dimensions": event.reduction_dimensions,
+            "image_ids": event.image_ids,
+            "save": event.save,
+        },
+    )
     if event.image_ids:
         image_infos = await image_get_list_async(api, event.project_id, images_ids=event.image_ids)
     else:

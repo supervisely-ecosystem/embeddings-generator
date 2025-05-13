@@ -3,6 +3,7 @@ from collections import defaultdict
 
 import dotenv
 import supervisely as sly
+from supervisely.api.entities_collection_api import CollectionTypeFilter
 from supervisely.app.widgets import (
     Bokeh,
     Button,
@@ -112,7 +113,9 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
         },
     )
     image_collection_id = r.get("collection_id")
-    image_infos = api.entities_collection.get_items(image_collection_id)
+    image_infos = api.entities_collection.get_items(
+        image_collection_id, CollectionTypeFilter.AI_SEARCH
+    )
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
@@ -167,7 +170,9 @@ def draw_projections_per_ids(project_id, ids, limit=20):
         },
     )
     image_collection_id = r.get("collection_id")
-    image_infos = api.entities_collection.get_items(image_collection_id)
+    image_infos = api.entities_collection.get_items(
+        image_collection_id, CollectionTypeFilter.AI_SEARCH
+    )
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
@@ -266,11 +271,14 @@ def draw_diverse(project_id, sample_size):
             "project_id": project_id,
             "sampling_method": "random",
             "sample_size": sample_size,
-            "clustering_method": "kmeans",
+            # "clustering_method": "kmeans",
+            "image_ids": [22862],
         },
     )
     image_collection_id = r.get("collection_id")
-    image_infos = api.entities_collection.get_items(image_collection_id)
+    image_infos = api.entities_collection.get_items(
+        image_collection_id, CollectionTypeFilter.AI_SEARCH
+    )
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 

@@ -48,6 +48,7 @@ class Event:
             by_image_ids: Optional[List[int]] = None,
             image_ids: Optional[List[int]] = None,
             dataset_id: Optional[int] = None,
+            threshold: Optional[float] = None,
         ):
             self.project_id = project_id
             self.limit = limit
@@ -55,6 +56,7 @@ class Event:
             self.by_image_ids = by_image_ids
             self.image_ids = image_ids
             self.dataset_id = dataset_id
+            self.threshold = threshold
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -65,6 +67,7 @@ class Event:
                 data.get(EventFields.BY_IMAGE_IDS),
                 data.get(EventFields.IMAGE_IDS),
                 data.get(EventFields.DATASET_ID),
+                data.get(EventFields.THRESHOLD),
             )
 
     class Diverse:
