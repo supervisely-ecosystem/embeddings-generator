@@ -14,7 +14,9 @@ from supervisely.app.widgets import (
     Input,
     InputNumber,
     RadioTabs,
+    Select,
     SelectProject,
+    Text,
 )
 
 dotenv.load_dotenv(os.path.expanduser("~/supervisely.env"))
@@ -45,8 +47,28 @@ tabs = RadioTabs(
     contents=[gallery, bokeh_iframe],
 )
 clusters_button = Button("Clusters")
-input_sample_size = InputNumber(value=20)
+limit_text = Text("<b>Limit</b>")
+limit_size_input = InputNumber(value=20, size="medium")
+limit_container = Container(widgets=[limit_text, limit_size_input])
+
 diverse_button = Button("Diverse")
+
+clustering_text = Text("<b>Clustering Method</b>")
+clustering_method_selector = Select(
+    items=[Select.Item("kmeans", "KMeans"), Select.Item("dbscan", "DBSCAN")],
+    placeholder="Clustering method",
+)
+clustering_container = Container(widgets=[clustering_text, clustering_method_selector])
+sampling_text = Text("<b>Sampling Method</b>")
+sampling_method_selector = Select(
+    items=[Select.Item("random", "Random"), Select.Item("centroids", "Centroids")],
+    placeholder="Sampling method",
+)
+sampling_container = Container(widgets=[sampling_text, sampling_method_selector])
+methods_container = Container(
+    widgets=[clustering_container, sampling_container, limit_container],
+    direction="horizontal",
+)
 
 
 def draw_all_projections(project_id):
@@ -259,7 +281,7 @@ def draw_clusters(project_id):
     gallery.loading = False
 
 
-def draw_diverse(project_id, sample_size):
+def draw_diverse(project_id, sample_size, clustering_method, sampling_method):
     gallery.loading = True
     bokeh_iframe.loading = True
     print("=====================================")
@@ -269,10 +291,10 @@ def draw_diverse(project_id, sample_size):
         "diverse",
         data={
             "project_id": project_id,
-            "sampling_method": "random",
+            "sampling_method": sampling_method,
             "sample_size": sample_size,
-            # "clustering_method": "kmeans",
-            "image_ids": [22862],
+            "clustering_method": clustering_method,
+            # "image_ids": [22862],
         },
     )
     image_collection_id = r.get("collection_id")
@@ -347,8 +369,10 @@ def clusters_click():
 @diverse_button.click
 def diverse_click():
     project_id = select_project.get_selected_id()
-    sample_size = input_sample_size.get_value()
-    draw_diverse(project_id, sample_size)
+    sample_size = limit_size_input.get_value()
+    clustering_method = clustering_method_selector.get_value()
+    sampling_method = sampling_method_selector.get_value()
+    draw_diverse(project_id, sample_size, clustering_method, sampling_method)
 
 
 card_1 = Card(title="1️⃣ Generate Embeddings", content=load_project)
@@ -368,7 +392,10 @@ card_2 = Card(
         direction="horizontal",
     ),
 )
-card_3 = Card(title="3️⃣ Diverse", content=Container(widgets=[input_sample_size, diverse_button]))
+card_3 = Card(
+    title="3️⃣ Diverse",
+    content=Container(widgets=[methods_container, diverse_button]),
+)
 card_4 = Card(title="4️⃣ Clusters", content=Container(widgets=[clusters_button]))
 container_cards_3_4 = Container(
     widgets=[card_3, card_4],

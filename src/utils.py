@@ -3,14 +3,16 @@ import base64
 import datetime
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass
 from functools import partial, wraps
 from time import perf_counter
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
 
@@ -877,3 +879,41 @@ def create_collection_and_populate(
     ]
     api.entities_collection.add_items(collection_id, items)
     return collection_id
+
+
+def hash_to_uuid(image_hash: str) -> uuid.UUID:
+    """Converts a base64-encoded image hash to a UUID."""
+    raw_bytes = base64.b64decode(image_hash)
+    if len(raw_bytes) != 32:
+        raise ValueError("Expected 32-byte hash input")
+
+    selected_bytes = raw_bytes[:8] + raw_bytes[-8:]
+    return uuid.UUID(bytes=selected_bytes)
+
+
+def link_to_uuid(image_link: str) -> uuid.UUID:
+    """Converts a string represented image link to a UUID."""
+    # Create a deterministic UUID based on the image link using uuid5 with a namespace
+    # Using URL namespace for links
+    return uuid.uuid5(uuid.NAMESPACE_URL, image_link)
+
+
+def prepare_ids(image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]) -> List[str]:
+    """Prepare Qdrant Collection IDs for the specified image infos.
+
+    :param image_infos: A list of ImageInfo or ImageInfoLite objects.
+    :type image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]
+    :return: A list of IDs.
+    :rtype: List[str]
+    """
+    ids = []
+    for info in image_infos:
+        if info.hash is not None:
+            ids.append(hash_to_uuid(info.hash).hex)
+        elif info.link is not None:
+            ids.append(link_to_uuid(info.link).hex)
+        else:
+            raise ValueError(
+                f"ImageInfoLite object must have either hash or link field set. Got {info}"
+            )
+    return ids

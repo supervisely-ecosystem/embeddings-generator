@@ -106,17 +106,16 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
             # Step 2: If force is True, delete existing collection items.
             if event.force:
-                image_hashes = [info.hash for info in image_infos]
                 sly.logger.debug(
                     "Force enabled for project %s, will recreate items in collection %s.",
                     event.project_id,
                     qdrant.IMAGES_COLLECTION,
                 )
-                await qdrant.delete_collection_items(image_hashes)
+                await qdrant.delete_collection_items(image_infos)
 
             # Step 3: Process images.
             image_infos = await process_images(api, event.project_id, image_infos=image_infos)
-            image_hashes = [info.hash for info in image_infos]
+            # image_hashes = [info.hash for info in image_infos]
 
             # if event.image_ids is None and len(image_infos) > 0:
             if len(image_infos) > 0:
@@ -128,8 +127,8 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
 
             if event.return_vectors:
-                _, vectors = await qdrant.get_items_by_hashes(
-                    qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
+                _, vectors = await qdrant.get_items_by_info(
+                    qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
                 )
                 # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
 
@@ -367,7 +366,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
             "sampling_method": event.sampling_method,
             "sample_size": event.sample_size,
             "clustering_method": event.clustering_method,
-            "num_clusters": event.num_clusters,
+            "num_clusters": event.sample_size,
             "dataset_id": event.dataset_id,
             "image_ids": event.image_ids,
         },
@@ -379,9 +378,9 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         image_infos = await image_get_list_async(api, event.project_id, dataset_id=event.dataset_id)
     else:
         image_infos = await image_get_list_async(api, event.project_id)
-    image_hashes = [info.hash for info in image_infos]
-    image_infos_result, vectors = await qdrant.get_items_by_hashes(
-        qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
+    # image_hashes = [info.hash for info in image_infos]
+    image_infos_result, vectors = await qdrant.get_items_by_info(
+        qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
     )
 
     image_infos_result = update_id_by_hash(image_infos, image_infos_result)
@@ -487,9 +486,9 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
         image_infos = await image_get_list_async(api, event.project_id, images_ids=event.image_ids)
     else:
         image_infos = await image_get_list_async(api, event.project_id)
-    image_hashes = [info.hash for info in image_infos]
-    image_infos_result, vectors = await qdrant.get_items_by_hashes(
-        qdrant.IMAGES_COLLECTION, image_hashes, with_vectors=True
+    # image_hashes = [info.hash for info in image_infos]
+    image_infos_result, vectors = await qdrant.get_items_by_info(
+        qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
     )
     image_infos_result = update_id_by_hash(image_infos, image_infos_result)
     data = {"vectors": vectors, "reduce": True}

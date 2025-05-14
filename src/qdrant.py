@@ -1,6 +1,3 @@
-import base64
-import uuid
-from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
 
@@ -10,7 +7,7 @@ from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.conversions import common_types as types
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.models import Batch, CollectionInfo, Distance, PointStruct, VectorParams
+from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
 
 import src.globals as g
 from src.utils import (
@@ -18,6 +15,7 @@ from src.utils import (
     QdrantFields,
     TupleFields,
     parse_timestamp,
+    prepare_ids,
     timeit,
     with_retries,
 )
@@ -83,6 +81,7 @@ class ImageReferences:
         dataset_ids: Optional[List[int]] = None,
     ):
         """Update the references with new values.
+
         :param image_id: Image IDs to add.
         :type image_id: Optional[List[int]], optional
         :param project_id: Project IDs to add.
@@ -117,21 +116,6 @@ class ImageReferences:
             if field in payload:
                 del payload[field]
         return payload
-
-
-def hash_to_uuid(image_hash: str) -> uuid.UUID:
-    """Converts a base64-encoded image hash to a UUID."""
-    raw_bytes = base64.b64decode(image_hash)
-    if len(raw_bytes) != 32:
-        raise ValueError("Expected 32-byte hash input")
-
-    selected_bytes = raw_bytes[:8] + raw_bytes[-8:]
-    return uuid.UUID(bytes=selected_bytes)
-
-
-def uuid_to_bytes(hash_uuid: uuid.UUID) -> bytes:
-    """Returns 16-byte UUID as bytes. This is a first 8 bytes and last 8 bytes of the image hash."""
-    return hash_uuid.bytes
 
 
 def get_search_filter(
@@ -185,17 +169,18 @@ def get_search_filter(
 
 @with_retries()
 async def delete_collection_items(
-    item_ids: List[str], collection_name: str = IMAGES_COLLECTION
+    image_infos: List[sly.ImageInfo], collection_name: str = IMAGES_COLLECTION
 ) -> None:
     """Delete a collection items with the specified IDs.
-    For IMAGES_COLLECTION IDs must be strings, that are image hashes.
+    For IMAGES_COLLECTION IDs must be strings, that are UUIDs of the images.
 
-    :param item_ids: A list of item IDs to delete.
-    :type item_ids: List[str]
+    :param image_infos: A list of ImageInfo objects to delete.
+    :type image_infos: List[ImageInfo]
     :param collection_name: The name of the collection to delete items from, defaults to IMAGES_COLLECTION.
     :type collection_name: str
     """
-    ids = [hash_to_uuid(hash).hex for hash in item_ids]
+    ids = await prepare_ids(image_infos)
+
     sly.logger.debug("Deleting items from collection %s...", ids)
     try:
         await client.delete(collection_name, ids)
@@ -276,15 +261,18 @@ async def collection_exists(collection_name: str) -> bool:
 
 @with_retries()
 @timeit
-async def get_items_by_hashes(
-    collection_name: str, image_hashes: List[str], with_vectors: bool = False
+async def get_items_by_info(
+    collection_name: str,
+    image_infos: List[Union[sly.ImageInfo, ImageInfoLite]],
+    with_vectors: bool = False,
 ) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
     """Get vectors from the collection based on the specified image hashes.
 
     :param collection_name: The name of the collection to get vectors from.
     :type collection_name: str
-    :param image_hashes: A list of image hashes to get vectors for.
-    :type image_hashes: List[int]
+    :param image_infos: A list of ImageInfo or ImageInfoLite objects.
+                        If ImageInfoLite, the hash or link field must be set.
+    :type image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]
     :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type with_vectors: bool, optional
     :return: A list of vectors.
@@ -293,16 +281,23 @@ async def get_items_by_hashes(
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
 
-    point_ids = [hash_to_uuid(image_hash).hex for image_hash in image_hashes]
+    point_ids = await prepare_ids(image_infos)
+
     points = await client.retrieve(
-        collection_name, point_ids, with_payload=True, with_vectors=with_vectors
+        collection_name=collection_name,
+        ids=point_ids,
+        with_payload=True,
+        with_vectors=with_vectors,
     )
+
     for point in points:
         point.payload = ImageReferences.clear_payload(point.payload)
+
     image_infos = [
         ImageInfoLite(id=None, dataset_id=None, project_id=None, **point.payload)
         for point in points
     ]
+
     if with_vectors:
         vectors = [point.vector for point in points]
         return image_infos, vectors
@@ -329,7 +324,7 @@ async def upsert(
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
     payloads = prepare_payloads(image_infos, reference_ids)
-    ids = [hash_to_uuid(image_info.hash).hex for image_info in image_infos]
+    ids = await prepare_ids(image_infos)
     sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
     sly.logger.debug("Upserting %d payloads to collection %s.", len(payloads), collection_name)
     await client.upsert(collection_name, Batch(vectors=vectors, ids=ids, payloads=payloads))
@@ -360,11 +355,10 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
     # Get specified ids from collection, compare updated_at and return ids that need to be updated.
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
-    points = await client.retrieve(
-        collection_name,
-        [hash_to_uuid(image_info.hash).hex for image_info in image_infos],
-        with_payload=True,
-    )
+
+    ids = prepare_ids(image_infos)
+
+    points = await client.retrieve(collection_name, ids, with_payload=True)
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
 
     diff, refs = _diff(image_infos, points)
@@ -519,12 +513,12 @@ async def search(
     for point in response.points:
         payload = ImageReferences.clear_payload(point.payload)
         items.append(ImageInfoLite(id=None, dataset_id=None, project_id=None, **payload))
-    result["items"] = items
+    result[SearchResultField.ITEMS] = items
     if return_vectors:
-        result["vectors"] = [point.vector for point in response.points]
+        result[SearchResultField.VECTORS] = [point.vector for point in response.points]
 
     if return_scores:
-        result["scores"] = [point.score for point in response.points]
+        result[SearchResultField.SCORES] = [point.score for point in response.points]
 
     return result
 
