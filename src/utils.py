@@ -1,16 +1,18 @@
 import asyncio
 import base64
 import datetime
-import os
-import shutil
-import tempfile
-from collections import namedtuple
+import hashlib
+import json
+import uuid
+from dataclasses import dataclass
 from functools import partial, wraps
 from time import perf_counter
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
-from supervisely._utils import resize_image_url
+from supervisely._utils import batched, resize_image_url
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
 
@@ -18,7 +20,9 @@ class TupleFields:
     """Fields of the named tuples used in the project."""
 
     ID = "id"
+    HASH = "hash"
     DATASET_ID = "dataset_id"
+    PROJECT_ID = "project_id"
     FULL_URL = "full_url"
     CAS_URL = "cas_url"
     HDF5_URL = "hdf5_url"
@@ -30,6 +34,7 @@ class TupleFields:
     ATLAS_INDEX = "atlasIndex"
     VECTOR = "vector"
     IMAGES = "images"
+    SCORE = "score"
 
 
 class QdrantFields:
@@ -40,6 +45,12 @@ class QdrantFields:
     OPTION = "option"
     RANDOM = "random"
     CENTROIDS = "centroids"
+
+    # Payload Fields
+    REFERENCE_IDS = "reference_ids"
+    PROJECT_IDS = "project_ids"
+    DATASET_IDS = "dataset_ids"
+    IMAGE_IDS = "image_ids"
 
 
 class EventFields:
@@ -54,43 +65,100 @@ class EventFields:
     LIMIT = "limit"
     METHOD = "method"
     REDUCTION_DIMENSIONS = "reduction_dimensions"
+    SAMPLING_METHOD = "sampling_method"
     SAMPLE_SIZE = "sample_size"
+    CLUSTERING_METHOD = "clustering_method"
+    NUM_CLUSTERS = "num_clusters"
     SAVE = "save"
+    RETURN_VECTORS = "return_vectors"
+    THRESHOLD = "threshold"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"
 
+    # Search by fields
+    BY_PROJECT_ID = "by_project_id"
+    BY_DATASET_ID = "by_dataset_id"
+    BY_IMAGE_IDS = "by_image_ids"
 
-_ImageInfoLite = namedtuple(
-    "_ImageInfoLite",
-    [
-        TupleFields.ID,
-        TupleFields.DATASET_ID,
-        TupleFields.FULL_URL,
-        TupleFields.CAS_URL,
-        TupleFields.UPDATED_AT,
-    ],
-)
+    # Event types
+    SEARCH = "search"
+    DIVERSE = "diverse"
+    CLUSTERING = "clustering"
+    EMBEDDINGS = "embeddings"
 
 
-class ImageInfoLite(_ImageInfoLite):
+class SamplingMethods:
+    """Sampling methods for the images."""
+
+    RANDOM = "random"
+    CENTROIDS = "centroids"
+
+
+class ClusteringMethods:
+    """Clustering methods for the images."""
+
+    KMEANS = "kmeans"
+    DBSCAN = "dbscan"
+
+
+class ResponseFields:
+    """Fields of the response file."""
+
+    COLLECTION_ID = "collection_id"
+    MESSAGE = "message"
+    STATUS = "status"
+    VECTORS = "vectors"
+    IMAGE_IDS = "image_ids"
+    BACKGROUND_TASK_ID = "background_task_id"
+    RESULT = "result"
+
+
+class ResponseStatus:
+    """Status of the response."""
+
+    SUCCESS = "success"
+    COMPLETED = "completed"
+    ERROR = "error"
+    IN_PROGRESS = "in_progress"
+    NOT_FOUND = "not_found"
+
+
+@dataclass
+class ImageInfoLite:
+    id: int
+    dataset_id: int
+    project_id: int
+    hash: str
+    full_url: str
+    cas_url: str
+    updated_at: str  # or datetime.datetime if you parse it
+    score = None
+
     def to_json(self):
         return {
             TupleFields.ID: self.id,
             TupleFields.DATASET_ID: self.dataset_id,
+            TupleFields.PROJECT_ID: self.project_id,
+            TupleFields.HASH: self.hash,
             TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.UPDATED_AT: self.updated_at,
+            TupleFields.SCORE: self.score,
         }
+        # Alternative: return asdict(self)  # if field names match keys
 
     @classmethod
     def from_json(cls, data):
         return cls(
             id=data[TupleFields.ID],
             dataset_id=data[TupleFields.DATASET_ID],
+            project_id=data[TupleFields.PROJECT_ID],
+            hash=data[TupleFields.HASH],
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             updated_at=data[TupleFields.UPDATED_AT],
+            score=data.get(TupleFields.SCORE, None),
         )
 
 
@@ -234,6 +302,21 @@ def get_project_info(api: sly.Api, project_id: int) -> sly.ProjectInfo:
     return api.project.get_info_by_id(project_id)
 
 
+@to_thread
+@timeit
+def get_team_info(api: sly.Api, team_id: int) -> sly.TeamInfo:
+    """Returns team info by ID.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param team_id: ID of the team to get info.
+    :type team_id: int
+    :return: Team info.
+    :rtype: sly.TeamInfo
+    """
+    return api.team.get_info_by_id(team_id)
+
+
 def _get_project_info_by_name(
     api: sly.Api, workspace_id: int, project_name: str
 ) -> sly.ProjectInfo:
@@ -299,14 +382,8 @@ def get_pcd_by_name(
 
 @to_thread
 @timeit
-def update_custom_data(api: sly.Api, project_id: int, custom_data: Dict):
-    return api.project.update_custom_data(project_id, custom_data)
-
-
-@to_thread
-@timeit
-def get_all_projects(api: sly.Api) -> List[sly.ProjectInfo]:
-    return api.project.get_list_all()["entities"]  # TODO: filter by custom data or flag
+def update_embeddings_updated_at(api: sly.Api, project_id: int, timestamp: str = None):
+    return api.project.set_embeddings_updated_at(project_id, timestamp)
 
 
 @to_thread
@@ -316,12 +393,13 @@ def get_file_info(api: sly.Api, team_id: int, path: str):
 
 
 @timeit
-async def get_image_infos(
+async def get_lite_image_infos(
     api: sly.Api,
     cas_size: int,
     project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
+    image_infos: List[sly.ImageInfo] = None,
 ) -> List[ImageInfoLite]:
     """Returns lite version of image infos to cut off unnecessary data.
     Uses either dataset_id or image_ids to get image infos.
@@ -332,20 +410,30 @@ async def get_image_infos(
     :type api: sly.Api
     :param cas_size: Size of the image for CAS, it will be added to URL.
     :type cas_size: int
+    :param project_id: ID of the project to get images from.
+    :type project_id: int
     :param dataset_id: ID of the dataset to get images from.
     :type dataset_id: int, optional
     :param image_ids: List of image IDs to get image infos.
     :type image_ids: List[int], optional
+    :param image_infos: List of image infos to get lite version from.
+    :type image_infos: List[sly.ImageInfo], optional
     :return: List of lite version of image infos.
     :rtype: List[ImageInfoLite]
     """
+    if not image_infos or len(image_infos) == 0:
+        image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids)
 
-    image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids)
-
+    if len(image_infos) == 0:
+        return []
+    if isinstance(image_infos[0], ImageInfoLite):
+        return image_infos
     return [
         ImageInfoLite(
             id=image_info.id,
             dataset_id=image_info.dataset_id,
+            project_id=project_id,
+            hash=image_info.hash,
             full_url=image_info.full_storage_url,
             cas_url=resize_image_url(
                 image_info.full_storage_url,
@@ -441,39 +529,73 @@ async def image_get_list_async(
     dataset_id: int = None,
     images_ids: List[int] = None,
     per_page: int = 500,
-):
+) -> List[sly.ImageInfo]:
     method = "images.list"
-    data = {
+    base_data = {
         ApiField.PROJECT_ID: project_id,
         ApiField.FORCE_METADATA_FOR_LINKS: False,
         ApiField.PER_PAGE: per_page,
     }
     if dataset_id is not None:
-        data[ApiField.DATASET_ID] = dataset_id
-    if images_ids is not None:
-        data[ApiField.FILTERS] = [{"field": ApiField.ID, "operator": "in", "value": images_ids}]
+        base_data[ApiField.DATASET_ID] = dataset_id
+
     semaphore = api.get_default_semaphore()
-    pages_count = None
-    tasks: List[asyncio.Task] = []
+    all_items = []
+    tasks = []
 
-    async def _r(data_):
-        nonlocal pages_count
+    async def _get_all_pages(batch_filters):
+        page_data = base_data.copy()
+        if batch_filters:
+            page_data[ApiField.FILTER] = batch_filters
+        page_data[ApiField.PAGE] = 1
+
         async with semaphore:
-            response = await api.post_async(method, data_)
+            response = await api.post_async(method, page_data)
             response_json = response.json()
-            items = response_json.get("entities", [])
+
             pages_count = response_json["pagesCount"]
-        return [api.image._convert_json_info(item) for item in items]
 
-    data[ApiField.PAGE] = 1
-    items = await _r(data)
+            batch_items = []
+            # Process first page
+            for item in response_json.get("entities", []):
+                image_info = api.image._convert_json_info(item)
+                batch_items.append(image_info)
 
-    for page_n in range(2, pages_count + 1):
-        data[ApiField.PAGE] = page_n
-        tasks.append(asyncio.create_task(_r(data.copy())))
-    for task in tasks:
-        items.extend(await task)
-    return items
+            # Get remaining pages if they exist
+            page_tasks = []
+            if pages_count > 1:
+                for page in range(2, pages_count + 1):
+                    page_data = page_data.copy()
+                    page_data[ApiField.PAGE] = page
+                    page_tasks.append(api.post_async(method, page_data))
+
+                responses = await asyncio.gather(*page_tasks)
+                for resp in responses:
+                    resp_json = resp.json()
+                    for item in resp_json.get("entities", []):
+                        image_info = api.image._convert_json_info(item)
+                        batch_items.append(image_info)
+
+            return batch_items
+
+    if images_ids is None:
+        # If no image IDs specified, get all images
+        tasks.append(asyncio.create_task(_get_all_pages([])))
+    else:
+        # Process image IDs in batches of 50
+        for batch in batched(images_ids):
+            batch_filters = [{"field": ApiField.ID, "operator": "in", "value": batch}]
+            tasks.append(asyncio.create_task(_get_all_pages(batch_filters)))
+            await asyncio.sleep(0.02)  # Small delay to avoid overwhelming the server
+
+    # Wait for all tasks to complete
+    batch_results = await asyncio.gather(*tasks)
+
+    # Combine results from all batches
+    for batch_items in batch_results:
+        all_items.extend(batch_items)
+
+    return all_items
 
 
 async def embeddings_up_to_date(
@@ -481,8 +603,317 @@ async def embeddings_up_to_date(
 ):
     if project_info is None:
         project_info = await get_project_info(api, project_id)
-    custom_data = project_info.custom_data or {}
-    emb_updated_at = custom_data.get("embeddings_updated_at", None)
-    if emb_updated_at is None:
+    if project_info.embeddings_updated_at is None:
         return False
-    return parse_timestamp(emb_updated_at) >= project_info.updated_at
+    return parse_timestamp(project_info.embeddings_updated_at) >= parse_timestamp(
+        project_info.updated_at
+    )
+
+
+async def get_list_all_pages_async(
+    api: sly.Api,
+    method,
+    data,
+    convert_json_info_cb,
+    progress_cb=None,
+    limit: int = None,
+    return_first_response: bool = False,
+    semaphore: Optional[List[asyncio.Semaphore]] = None,
+):
+    """
+    Get list of all or limited quantity entities from the Supervisely server.
+    """
+    from copy import deepcopy
+
+    def _add_sort_param(data):
+        """_add_sort_param"""
+        results = deepcopy(data)
+        results[ApiField.SORT] = ApiField.ID
+        results[ApiField.SORT_ORDER] = "asc"  # @TODO: move to enum
+        return results
+
+    convert_func = convert_json_info_cb
+
+    if ApiField.SORT not in data:
+        data = _add_sort_param(data)
+
+    if semaphore is None:
+        semaphore = api.get_default_semaphore()
+
+    # Get first page to determine pagination details
+    first_page_data = {**data, "page": 1}
+    first_response = await api.post_async(method, first_page_data)
+    first_response_json = first_response.json()
+
+    total = first_response_json["total"]
+    per_page = first_response_json["perPage"]
+    pages_count = first_response_json["pagesCount"]
+
+    results = first_response_json["entities"]
+    if progress_cb is not None:
+        progress_cb(len(results))
+
+    # If only one page or limit is already exceeded with first page
+    if (pages_count == 1 and len(results) == total) or (
+        limit is not None and len(results) >= limit
+    ):
+        if limit is not None:
+            results = results[:limit]
+        if return_first_response:
+            return [convert_func(item) for item in results], first_response_json
+        return [convert_func(item) for item in results]
+
+    # Process remaining pages concurrently
+    async def fetch_page(page_num):
+        async with semaphore:
+            page_data = {**data, "page": page_num, "per_page": per_page}
+            response = await api.post_async(method, page_data)
+            response_json = response.json()
+            page_items = response_json.get("entities", [])
+            if progress_cb is not None:
+                progress_cb(len(page_items))
+            return page_items
+
+    # Create tasks for all remaining pages
+    tasks = []
+    for page_num in range(2, pages_count + 1):
+        tasks.append(asyncio.create_task(fetch_page(page_num)))
+
+    # Wait for all tasks to complete
+    for task in asyncio.as_completed(tasks):
+        page_items = await task
+        results.extend(page_items)
+        if limit is not None and len(results) >= limit:
+            break
+
+    if len(results) != total and limit is None:
+        raise RuntimeError(f"Method {method!r}: error during pagination, some items are missed")
+
+    if limit is not None:
+        results = results[:limit]
+
+    return [convert_func(item) for item in results]
+
+
+@timeit
+async def get_all_projects(
+    api: sly.Api,
+    project_ids: Optional[List[int]] = None,
+) -> List[sly.ProjectInfo]:
+    """
+    Get all projects from the Supervisely server that have a flag for automatic embeddings update.
+
+    Fields that will be returned:
+        - id
+        - name
+        - updated_at
+        - embeddings_enabled
+        - embeddings_in_progress
+        - embeddings_updated_at
+        - team_id
+        - workspace_id
+        - items_count
+
+    """
+    method = "projects.list.all"
+    convert_json_info = api.project._convert_json_info
+    fields = [
+        ApiField.EMBEDDINGS_ENABLED,
+        ApiField.EMBEDDINGS_IN_PROGRESS,
+        ApiField.EMBEDDINGS_UPDATED_AT,
+    ]
+    data = {
+        ApiField.SKIP_EXPORTED: True,
+        ApiField.EXTRA_FIELDS: fields,
+        ApiField.FILTER: [
+            {
+                ApiField.FIELD: ApiField.EMBEDDINGS_ENABLED,
+                ApiField.OPERATOR: "=",
+                ApiField.VALUE: True,
+            }
+        ],
+    }
+    tasks = []
+    if project_ids is not None:
+        for batch in batched(project_ids):
+            data[ApiField.FILTER] = [
+                {
+                    ApiField.FIELD: ApiField.ID,
+                    ApiField.OPERATOR: "in",
+                    ApiField.VALUE: batch,
+                },
+                {
+                    ApiField.FIELD: ApiField.EMBEDDINGS_ENABLED,
+                    ApiField.OPERATOR: "=",
+                    ApiField.VALUE: True,
+                },
+            ]
+            tasks.append(
+                get_list_all_pages_async(
+                    api,
+                    method,
+                    data=data,
+                    convert_json_info_cb=convert_json_info,
+                    progress_cb=None,
+                    limit=None,
+                    return_first_response=False,
+                )
+            )
+    else:
+        tasks.append(
+            get_list_all_pages_async(
+                api,
+                method,
+                data=data,
+                convert_json_info_cb=convert_json_info,
+                progress_cb=None,
+                limit=None,
+                return_first_response=False,
+            )
+        )
+    results = []
+    for task in asyncio.as_completed(tasks):
+        results.extend(await task)
+    return results
+
+
+def update_id_by_hash(
+    source_infos: List[ImageInfoLite], target_infos: List[ImageInfoLite]
+) -> List[ImageInfoLite]:
+    """Updates the ID of the target image infos by the hash of the source image infos.
+
+    :param source_infos: Source image infos to get IDs from.
+    :type source_infos: List[ImageInfoLite]
+    :param target_infos: Target image infos to update IDs.
+    :type target_infos: List[ImageInfoLite]
+    :return: List of target image infos with updated IDs.
+    :rtype: List[ImageInfoLite]
+    """
+    hash_to_id = {info.hash: info.id for info in source_infos}
+
+    for info in target_infos:
+        if info.hash in hash_to_id:
+            info.id = hash_to_id[info.hash]
+        else:
+            sly.logger.warning(
+                "Hash %s not found in source infos. This should not happen.",
+                info.hash,
+            )
+
+    return target_infos
+
+
+def get_key(prompt: str, project_id: str, settings: Dict) -> str:
+    """
+    Generate a unique hash key for a search request.
+
+    :param prompt: Prompt for the search request.
+    :type prompt: str
+    :param project_id: ID of the project.
+    :type project_id: str
+    :param settings: Settings for the search request.
+    :type settings: Dict
+    :return: Unique hash key for the search request.
+    :rtype: str
+    """
+    cache_data = {"prompt": prompt, "project_id": project_id, "settings": settings}
+    serialized = json.dumps(cache_data, sort_keys=True)
+    return hashlib.md5(serialized.encode()).hexdigest()
+
+
+@to_thread
+def create_collection_and_populate(
+    api: sly.Api,
+    project_id: int,
+    name: str,
+    image_ids: List[int],
+    event: EventFields,
+    collection_type: str = CollectionType.AI_SEARCH,
+    ai_search_key: str = None,
+) -> int:
+    """Create a collection in the project.
+
+    **NOTE**: For events CLUSTERING, DIVERSE, and EMBEDDINGS, collection will be recreated if it already exists.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param project_id: ID of the project to create collection in.
+    :type project_id: int
+    :param name: Name of the collection.
+    :type name: str
+    :param image_ids: List of image IDs to populate the collection.
+    :type image_ids: List[int]
+    :param event: Event type to determine default AI Search key.
+                For diverse and clustering search, AI Search key will be the same and automatically generated inside this function.
+                For prompt search, must be generated and passed to the function.
+    :type event: EventFields
+    :param collection_type: Type of the collection.
+    :type collection_type: str
+    :param ai_search_key: AI search key for the collection.
+    :type ai_search_key: str, optional
+    :return: ID of the created collection.
+    :rtype: int
+    """
+    if event in [EventFields.DIVERSE, EventFields.CLUSTERING, EventFields.EMBEDDINGS]:
+        # Generate AI search key for diverse and clustering search which will be the same
+        ai_search_key = get_key(event, project_id, {"event": event})
+
+        # Remove existing collection with the same AI search key
+        while True:
+            collection_info = api.entities_collection.get_info_by_ai_search_key(
+                project_id, ai_search_key
+            )
+            if collection_info is None:
+                break
+            api.entities_collection.remove(collection_info.id)
+
+    collection_id = api.entities_collection.create(
+        project_id=project_id,
+        name=name,
+        type=collection_type,
+        ai_search_key=ai_search_key,
+    ).id
+    items = [
+        CollectionItem(entity_id=image_id, meta=CollectionItem.Meta(score=1))
+        for image_id in image_ids
+    ]
+    api.entities_collection.add_items(collection_id, items)
+    return collection_id
+
+
+def hash_to_uuid(image_hash: str) -> uuid.UUID:
+    """Converts a base64-encoded image hash to a UUID."""
+    raw_bytes = base64.b64decode(image_hash)
+    if len(raw_bytes) != 32:
+        raise ValueError("Expected 32-byte hash input")
+
+    selected_bytes = raw_bytes[:8] + raw_bytes[-8:]
+    return uuid.UUID(bytes=selected_bytes)
+
+
+def link_to_uuid(image_link: str) -> uuid.UUID:
+    """Converts a string represented image link to a UUID."""
+    # Create a deterministic UUID based on the image link using uuid5 with a namespace
+    # Using URL namespace for links
+    return uuid.uuid5(uuid.NAMESPACE_URL, image_link)
+
+
+def prepare_ids(image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]) -> List[str]:
+    """Prepare Qdrant Collection IDs for the specified image infos.
+
+    :param image_infos: A list of ImageInfo or ImageInfoLite objects.
+    :type image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]
+    :return: A list of IDs.
+    :rtype: List[str]
+    """
+    ids = []
+    for info in image_infos:
+        if info.hash is not None:
+            ids.append(hash_to_uuid(info.hash).hex)
+        elif info.link is not None:
+            ids.append(link_to_uuid(info.link).hex)
+        else:
+            raise ValueError(
+                f"ImageInfoLite object must have either hash or link field set. Got {info}"
+            )
+    return ids

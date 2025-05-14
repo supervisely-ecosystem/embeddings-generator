@@ -14,7 +14,7 @@ from src.utils import (
     ImageInfoLite,
     get_dataset_by_name,
     get_file_info,
-    get_image_infos,
+    get_lite_image_infos,
     get_or_create_dataset,
     get_or_create_project,
     get_pcd_by_name,
@@ -23,6 +23,7 @@ from src.utils import (
     parse_timestamp,
     send_request,
     timeit,
+    update_id_by_hash,
 )
 
 
@@ -31,7 +32,7 @@ def projections_path(project_id):
 
 
 def projections_project_name():
-    return "Embeddings projections"
+    return "Embeddings Projections"
 
 
 def projections_dataset_name(project_id):
@@ -47,12 +48,19 @@ async def create_projections(
     api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
     if image_ids is None:
-        image_infos = await get_image_infos(
+        image_infos = await get_lite_image_infos(
             api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, dataset_id=dataset_id
         )
-        image_ids = [info.id for info in image_infos]
+    else:
+        image_infos = await get_lite_image_infos(
+            api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, image_ids=image_ids
+        )
+    # image_hashes = [info.hash for info in image_infos]
 
-    image_infos, vectors = await qdrant.get_items_by_ids(project_id, image_ids, with_vectors=True)
+    image_infos_result, vectors = await qdrant.get_items_by_info(
+        qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
+    )
+    image_infos_result = update_id_by_hash(image_infos, image_infos_result)
     projections = await send_request(
         api,
         g.projections_service_task_id,
@@ -62,7 +70,7 @@ async def create_projections(
         retries=3,
         raise_error=True,
     )
-    return image_infos, projections
+    return image_infos_result, projections
 
 
 @timeit
@@ -74,6 +82,7 @@ async def save_projections(
     project_info: Optional[sly.ProjectInfo] = None,
     cluster_labels: List[int] = None,
 ):
+    """Saves projections to a PCD file and uploads it to the point cloud project."""
     if project_info is None:
         project_info = await get_project_info(api, project_id)
     pcd_dataset_info = await get_or_create_projections_dataset(
@@ -95,6 +104,10 @@ async def save_projections(
 async def get_pcd_info(
     api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
 ) -> sly.api.pointcloud_api.PointcloudInfo:
+    """
+    Retrieves point cloud information for projections associated with a specific project.
+    Validates the existence of project, dataset, and point cloud for projections.
+    """
     if project_info is None:
         project_info = await get_project_info(api, project_id)
     pcd_project_info = await get_project_info_by_name(
@@ -124,6 +137,12 @@ async def get_projections(
     project_info: Optional[sly.ProjectInfo] = None,
     pcd_info: Optional[sly.api.pointcloud_api.PointcloudInfo] = None,
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
+    """
+    Retrieves the 2D projections of image embeddings from a point cloud file.
+    This function downloads a point cloud file associated with a project, extracts the 2D projection
+    vectors (first two dimensions of the point cloud points) and returns them along with the corresponding
+    image information.
+    """
     if pcd_info is None:
         if project_info is None:
             project_info = await get_project_info(api, project_id)
@@ -132,7 +151,7 @@ async def get_projections(
     pcd = await download_pcd(api, pcd_info.id)
     vectors = pcd.points[:, :2]
     image_ids = pcd.image_ids
-    image_infos = await get_image_infos(
+    image_infos = await get_lite_image_infos(
         api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, image_ids=image_ids
     )
     return image_infos, vectors.tolist()
@@ -141,6 +160,13 @@ async def get_projections(
 async def get_or_create_projections_dataset(
     api: sly.Api, image_project_id: int, image_project_info: sly.ProjectInfo = None
 ) -> sly.DatasetInfo:
+    """
+    Gets or creates a dataset for projections based on an image project.
+
+    This function checks if a dataset exists for storing projections associated with the specified image project.
+    If it exists, it returns the dataset info; if not, it creates a new dataset and returns its info.
+    The dataset is created within a point clouds project that is either retrieved or created if not exists.
+    """
     if image_project_info is None:
         image_project_info = await get_project_info(api, image_project_id)
     workspace_id = image_project_info.workspace_id
@@ -151,11 +177,16 @@ async def get_or_create_projections_dataset(
     return dataset_info
 
 
-async def projections_up_to_date(
+async def is_projections_up_to_date(
     api: sly.Api,
     project_id: int,
     project_info: Optional[sly.ProjectInfo] = None,
 ) -> bool:
+    """
+    Checks if the projections (embeddings visualization) are up to date with the current project state.
+    Compares the timestamp of the last update of the point cloud data with the timestamp of the last
+    project update to determine if the projections need to be recalculated.
+    """
     try:
         pcd_info = await get_pcd_info(api, project_id)
     except ValueError:
@@ -166,6 +197,13 @@ async def projections_up_to_date(
 
 
 async def get_or_create_projections(api: sly.Api, project_id, project_info):
+    """
+    Retrieves existing projections for a project or creates new ones if needed.
+
+    This function checks if projections exist for the given project and are up to date.
+    If projections don't exist or are outdated (project was updated after projections
+    were created), new projections will be generated.
+    """
     if project_info is None:
         project_info = api.project.get_info_by_id(project_id)
     try:
@@ -181,7 +219,11 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
 
     if pcd_info is None:
         # create new projections
-        image_infos, projections = await create_projections(api, project_id, image_ids=image_ids)
+        image_infos, projections = await create_projections(
+            api,
+            project_id,
+            # image_ids=image_ids, #! fixme
+        )
         # save projections
         await save_projections(
             api,

@@ -23,8 +23,15 @@ cas_host = os.getenv("modal.state.casHost") or os.getenv("CAS_HOST")
 projections_service_task_id = os.getenv("modal.state.projections_service_task_id") or os.getenv(
     "PROJECTIONS_SERVICE_TASK_ID"
 )
+update_interval = int(os.getenv("modal.state.update_interval") or os.getenv("UPDATE_INTERVAL"))
 try:
     cas_host = int(cas_host)
+    task_info = api.task.get_info_by_id(cas_host)
+    try:
+        cas_host = api.server_address + task_info["settings"]["message"]["appInfo"]["baseUrl"]
+    except KeyError:
+        sly.logger.warning("Cannot get CAS URL from task settings")
+        raise RuntimeError("Cannot connect to CLIP Service")
 except ValueError:
     if cas_host[:4] not in ["http", "ws:/", "grpc"]:
         cas_host = "grpc://" + cas_host
@@ -41,8 +48,10 @@ sly.logger.info("Projections service task ID: %s", projections_service_task_id)
 
 # region constants
 IMAGE_SIZE_FOR_CAS = 224
-UPDATE_EMBEDDINGS_INTERVAL = 10  # minutes
+UPDATE_EMBEDDINGS_INTERVAL = update_interval  # minutes, default is 10
 # endregion
 
 sly.logger.debug("Image size for CAS: %s", IMAGE_SIZE_FOR_CAS)
 sly.logger.debug("Update embeddings interval: %s", UPDATE_EMBEDDINGS_INTERVAL)
+
+background_tasks = {}
