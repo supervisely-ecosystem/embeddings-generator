@@ -92,7 +92,9 @@ class SearchCache:
     def drop_cache(api: sly.Api, project_id: int):
         """Delete all AI Collections in the project."""
 
-        collections = api.entities_collection.get_list(project_id, type=CollectionType.AI_SEARCH)
+        collections = api.entities_collection.get_list(
+            project_id, collection_type=CollectionType.AI_SEARCH
+        )
         for collection in collections:
             try:
                 api.entities_collection.remove(collection.id, force=True)
