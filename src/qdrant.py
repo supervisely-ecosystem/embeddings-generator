@@ -7,12 +7,26 @@ from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.conversions import common_types as types
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.models import (Batch, CollectionInfo, Distance,
-                                  OverwritePayloadOperation, VectorParams)
+from qdrant_client.http.models import PointStruct, UpdateStatus
+from qdrant_client.models import (
+    Batch,
+    CollectionInfo,
+    Distance,
+    OverwritePayloadOperation,
+    SetPayload,
+    VectorParams,
+)
 
 import src.globals as g
-from src.utils import (ImageInfoLite, QdrantFields, TupleFields,
-                       parse_timestamp, prepare_ids, timeit, with_retries)
+from src.utils import (
+    ImageInfoLite,
+    QdrantFields,
+    TupleFields,
+    parse_timestamp,
+    prepare_ids,
+    timeit,
+    with_retries,
+)
 
 
 def create_client_from_url(url: str) -> AsyncQdrantClient:
@@ -365,7 +379,7 @@ async def get_diff(
         collection_name = str(collection_name)
 
     if ids is None:
-        ids = prepare_ids(image_infos)
+        ids = await prepare_ids(image_infos)
 
     points = await client.retrieve(collection_name, ids, with_payload=True)
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
@@ -636,16 +650,23 @@ async def update_payloads(collection_name: str, id_to_payload: Dict[str, Dict]) 
     :param id_to_payload: A dictionary with ID keys and payload values.
     :type id_to_payload: Dict[str, Dict]
     """
+    if len(id_to_payload) == 0:
+        return
+
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
-
     await client.batch_update_points(
         collection_name,
         update_operations=[
-            OverwritePayloadOperation(id=point_id, payload=payload)
+            OverwritePayloadOperation(
+                overwrite_payload=SetPayload(
+                    payload=payload,
+                    points=[point_id],
+                )
+            )
             for point_id, payload in id_to_payload.items()
         ],
-        wait=False,  #! TODO: check if this is correct
+        wait=False,
     )
 
 

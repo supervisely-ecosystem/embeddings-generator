@@ -134,7 +134,7 @@ class ImageInfoLite:
     full_url: str
     cas_url: str
     updated_at: str  # or datetime.datetime if you parse it
-    score = None
+    score: float = None
 
     def to_json(self):
         return {
@@ -399,7 +399,7 @@ def set_embeddings_updated_at(
 @timeit
 def set_embeddings_in_progress(api: sly.Api, project_id: int, in_progress: bool):
     """Sets the embeddings in progress flag for the project."""
-    api.project.set_embeddings_in_progress(project_id, in_progress)
+    api.project.set_embeddings_in_progress(id=project_id, in_progress=in_progress)
 
 
 @to_thread
@@ -656,7 +656,6 @@ async def get_list_all_pages_async(
 
     if ApiField.SORT not in data:
         data = _add_sort_param(data)
-
     if semaphore is None:
         semaphore = api.get_default_semaphore()
 
@@ -729,7 +728,7 @@ async def get_all_projects(
         - updated_at
         - embeddings_enabled
         - embeddings_in_progress
-        - embeddings_updated_at
+        - is_embeddings_updated
         - team_id
         - workspace_id
         - items_count
@@ -740,7 +739,7 @@ async def get_all_projects(
     fields = [
         ApiField.EMBEDDINGS_ENABLED,
         ApiField.EMBEDDINGS_IN_PROGRESS,
-        ApiField.EMBEDDINGS_UPDATED_AT,
+        ApiField.IS_EMBEDDINGS_UPDATED,
     ]
     data = {
         ApiField.SKIP_EXPORTED: True,
@@ -918,6 +917,7 @@ def link_to_uuid(image_link: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, image_link)
 
 
+@to_thread
 def prepare_ids(image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]) -> List[str]:
     """Prepare Qdrant Collection IDs for the specified image infos.
 
@@ -929,9 +929,9 @@ def prepare_ids(image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]) -> List[
     ids = []
     for info in image_infos:
         if info.hash is not None:
-            ids.append(hash_to_uuid(info.hash).hex)
+            ids.append(str(hash_to_uuid(info.hash)))
         elif info.link is not None:
-            ids.append(link_to_uuid(info.link).hex)
+            ids.append(str(link_to_uuid(info.link)))
         else:
             raise ValueError(
                 f"ImageInfoLite object must have either hash or link field set. Got {info}"

@@ -17,7 +17,6 @@ class SearchCache:
 
     SYSTEM_NAME_PREFIX = "AI Search Collection: "
 
-    @to_thread
     def __init__(self, api: sly.Api, project_id: int, prompt: str, settings: Dict):
         """
         Initialize the cache.
@@ -33,7 +32,7 @@ class SearchCache:
         """
         self.api = api
         self.project_id = project_id
-        self.project_info = api.project.get_info_by_id(project_id)
+        self.project_info = api.project.get_info_by_id(project_id, with_embeddings_info=True)
         self.team_id = self.project_info.team_id
         self.prompt_text = prompt
         self.settings = settings

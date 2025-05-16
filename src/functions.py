@@ -66,7 +66,7 @@ async def process_images(
         payloads = await qdrant.get_item_payloads(collection_name=qdrant.IMAGES_COLLECTION, ids=ids)
     # Get diff of image infos, check if they are already
     # in the Qdrant collection and have the same updated_at field.
-    id_to_info_map = {point_id: image_info for point_id, image_info in zip(ids, image_infos)}
+    # id_to_info_map = {point_id: image_info for point_id, image_info in zip(ids, image_infos)}
     diff = await qdrant.get_diff(
         collection_name=qdrant.IMAGES_COLLECTION,
         image_infos=image_infos,
@@ -87,11 +87,13 @@ async def process_images(
     for point_id, diff_dict in diff.items():
         if diff_dict["info"] is not None:
             image_infos.append(diff_dict["info"])
-            img_refs = qdrant.ImageReferences(diff_dict["payload"])
+            img_refs = (
+                qdrant.ImageReferences(diff_dict["payload"]) if diff_dict["payload"] else None
+            )
             references.append(img_refs)
         elif diff_dict["payload"] is not None:
             update_payloads[point_id] = diff_dict["payload"]
-    logger.debug("Images to be processed: %d.", total_progress)    
+    logger.debug("Images to be processed: %d.", total_progress)
     for image_batch, references_batch in zip(sly.batched(image_infos), sly.batched(references)):
         # Get vectors from images.
         vectors_batch = await cas.get_vectors([image_info.cas_url for image_info in image_batch])
@@ -107,7 +109,11 @@ async def process_images(
             current_progress,
             total_progress,
         )
-    await qdrant.update_payloads(update_payloads) #! finish it
+        await set_embeddings_updated_at(api, image_batch)
+    if len(update_payloads) > 0:
+        await qdrant.update_payloads(
+            collection_name=qdrant.IMAGES_COLLECTION, id_to_payload=update_payloads
+        )
     logger.debug("All %d images have been processed.", total_progress)
     return image_infos
 
@@ -122,42 +128,42 @@ async def update_embeddings(
     if project_info is None:
         project_info = await get_project_info(api, project_id)
     # Check if embeddings are up-to-date
-    if project_info.embeddings_updated_at is None or force:
+    if project_info.is_embeddings_updated is False or force:
         image_infos = await process_images(api, project_id)
-    elif parse_timestamp(project_info.embeddings_updated_at) < parse_timestamp(
-        project_info.updated_at
-    ):
-        # Get all datasets that were updated after the embeddings were updated.
-        dataset_infos = await get_datasets(api, project_id, recursive=True)
-        dataset_infos = [
-            dataset_info
-            for dataset_info in dataset_infos
-            if parse_timestamp(dataset_info.updated_at)
-            > parse_timestamp(project_info.embeddings_updated_at)
-        ]
-        # Get image IDs for all datasets.
-        tasks = []
-        for dataset_info in dataset_infos:
-            tasks.append(
-                asyncio.create_task(
-                    get_lite_image_infos(
-                        api,
-                        cas_size=g.IMAGE_SIZE_FOR_CAS,
-                        project_id=project_id,
-                        dataset_id=dataset_info.id,
-                    )
-                )
-            )
-        results = await asyncio.gather(*tasks)
-        image_infos = [info for result in results for info in result]
         if len(image_infos) > 0:
-            # image_ids = [info.id for info in image_infos]
-            image_infos = await process_images(api, project_id, image_infos=image_infos)
+            await set_embeddings_updated_at(api, image_infos)
+    # elif parse_timestamp(project_info.embeddings_updated_at) < parse_timestamp(
+    #     project_info.updated_at
+    # ):
+    #     # Get all datasets that were updated after the embeddings were updated.
+    #     dataset_infos = await get_datasets(api, project_id, recursive=True)
+    #     dataset_infos = [
+    #         dataset_info
+    #         for dataset_info in dataset_infos
+    #         if parse_timestamp(dataset_info.updated_at)
+    #         > parse_timestamp(project_info.embeddings_updated_at)
+    #     ]
+    #     # Get image IDs for all datasets.
+    #     tasks = []
+    #     for dataset_info in dataset_infos:
+    #         tasks.append(
+    #             asyncio.create_task(
+    #                 get_lite_image_infos(
+    #                     api,
+    #                     cas_size=g.IMAGE_SIZE_FOR_CAS,
+    #                     project_id=project_id,
+    #                     dataset_id=dataset_info.id,
+    #                 )
+    #             )
+    #         )
+    #     results = await asyncio.gather(*tasks)
+    #     image_infos = [info for result in results for info in result]
+    #     if len(image_infos) > 0:
+    #         # image_ids = [info.id for info in image_infos]
+    #         image_infos = await process_images(api, project_id, image_infos=image_infos)
     else:
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
-    if len(image_infos) > 0:
-        await set_embeddings_updated_at(api, image_infos)
 
 
 @timeit
@@ -196,9 +202,9 @@ async def auto_update_embeddings(
         "project_name": project_info.name,
         "project_id": project_id,
         "items_count": project_info.items_count,
-        "embeddings_updated_at": project_info.embeddings_updated_at,
         "updated_at": project_info.updated_at,
         "embeddings_enabled": project_info.embeddings_enabled,
+        "is_embeddings_updated": project_info.is_embeddings_updated,
     }
     if not project_info.embeddings_enabled:
         logger.debug("Embeddings are not activated for project %d.", project_id, extra=log_extra)
@@ -229,9 +235,10 @@ async def auto_update_all_embeddings():
     # project_ids = [int(name) for name in collection_names]
     project_infos: List[sly.ProjectInfo] = await get_all_projects(g.api)
     for project_info in project_infos:
-        await auto_update_embeddings(
-            g.api,
-            project_info.id,
-            project_info=project_info,
-        )
+        if project_info.is_embeddings_updated is False:
+            await auto_update_embeddings(
+                g.api,
+                project_info.id,
+                project_info=project_info,
+            )
     logger.info("Auto update all embeddings task finished.")

@@ -96,7 +96,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
     async def execute():
         try:
-            await set_embeddings_in_progress(event.project_id, True)
+            await set_embeddings_in_progress(api, event.project_id, True)
 
             if event.image_ids:
                 image_infos = await image_get_list_async(
@@ -119,11 +119,10 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             image_infos = await process_images(
                 api, event.project_id, image_infos=image_infos, payloads=current_payloads
             )
-            #! continue form here
             if len(image_infos) > 0:
                 # Step 4: Update embeddings timestamp for images and delete all AI collections in the project as they are outdated.
-                await set_embeddings_updated_at(api, image_infos)
-                await SearchCache.drop_cache(event.project_id)
+
+                await SearchCache.drop_cache(api, event.project_id)
 
             sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
 
@@ -141,7 +140,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     event.project_id,
                     len(image_infos),
                 )
-                await set_embeddings_in_progress(event.project_id, False)
+                await set_embeddings_in_progress(api, event.project_id, False)
                 return JSONResponse(
                     {
                         ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
@@ -149,7 +148,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     }
                 )
             else:
-                await set_embeddings_in_progress(event.project_id, False)
+                await set_embeddings_in_progress(api, event.project_id, False)
                 message = f"Embeddings creation for project {event.project_id} has been completed."
                 sly.logger.info(message)
                 return JSONResponse({ResponseFields.MESSAGE: message})
@@ -157,7 +156,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             sly.logger.error(
                 "Error while creating embeddings for project %s: %s", event.project_id, str(e)
             )
-            await set_embeddings_in_progress(event.project_id, False)
+            await set_embeddings_in_progress(api, event.project_id, False)
             return JSONResponse(
                 {
                     ResponseFields.MESSAGE: f"Error while creating embeddings for project {event.project_id}: {str(e)}"
@@ -215,16 +214,10 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     cache = SearchCache(api, event.project_id, prompt_str, settings)
 
     if cache.collection_id is not None and cache.updated_at is not None:
-        if cache.project_info.embeddings_updated_at is None:
-            # If the project has no embeddings, invalidate the cache.
-            sly.logger.info("Project %s has no embeddings. Invalidating cache.", event.project_id)
-            await cache.clear()
-        elif parse_timestamp(cache.updated_at) < parse_timestamp(
-            cache.project_info.embeddings_updated_at
-        ):
-            # If the cache is older than the project update timestamp, invalidate it.
+        if cache.project_info.is_embeddings_updated is False:
+            # If the project has outdated embeddings, invalidate the cache.
             sly.logger.info(
-                "Cached search results are older than the project update. Invalidating cache."
+                "Project %s has outdated embeddings. Invalidating cache.", event.project_id
             )
             await cache.clear()
         else:
@@ -266,6 +259,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # Combine text prompts and image URLs to create a query.
     queries = text_prompts + image_urls
     sly.logger.info("Final query: %s", queries)
+
+    if len(queries) == 0:
+        return {ResponseFields.MESSAGE: "No queries provided."}
 
     # Vectorize the query data (can be a text prompt or an image URL).
     query_vectors = await cas.get_vectors(queries)

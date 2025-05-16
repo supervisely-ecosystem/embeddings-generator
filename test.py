@@ -8,8 +8,9 @@ from supervisely.app.widgets import (
     Bokeh,
     Button,
     Card,
+    Checkbox,
     Container,
-    GridGalleryV2,
+    GridGallery,
     IFrame,
     Input,
     InputNumber,
@@ -38,10 +39,11 @@ bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="100%")
 select_project = SelectProject(default_id=project_id, compact=False, workspace_id=workspace_id)
 prompt_search = Input(placeholder="Search query")
 image_search = Input(placeholder="Image IDs")
-gallery = GridGalleryV2(5)
+gallery = GridGallery(5)
 prompt_search_button = Button("Prompt Search")
 image_search_button = Button("Image Search")
-load_project = Button("Load project")
+load_project = Button("Generate")
+force_checkbox = Checkbox(content="Force update")
 tabs = RadioTabs(
     titles=["Gallery", "Plot"],
     contents=[gallery, bokeh_iframe],
@@ -71,7 +73,7 @@ methods_container = Container(
 )
 
 
-def draw_all_projections(project_id):
+def draw_all_projections(project_id, force):
     global current_items
 
     bokeh_iframe.loading = True
@@ -86,7 +88,7 @@ def draw_all_projections(project_id):
         r = api.task.send_request(
             embeddings_generator_task_id,
             "embeddings",
-            data={"project_id": project_id, "force": False, "return_vectors": True},
+            data={"project_id": project_id, "force": force, "return_vectors": True},
         )
         image_ids = r.get("image_ids")
     except:
@@ -141,35 +143,42 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
-    print("Init bokeh widget")
-    this_ids = set([info.id for info in image_infos])
-    bokeh.clear()
-    plot = Bokeh.Circle(
-        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
-        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
-        colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
-        legend_label="Images",
-        plot_id=1,
-        radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
-    )
-    new_plot = Bokeh.Circle(
-        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
-        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
-        colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
-        legend_label=prompt,
-        radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
-    )
-    bokeh.add_plots([plot, new_plot])
-    bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
-    bokeh_iframe.loading = False
+    # print("Init bokeh widget")
+    # this_ids = set([info.id for info in image_infos])
+    # bokeh.clear()
+    # plot = Bokeh.Circle(
+    #     x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
+    #     y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
+    #     colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
+    #     legend_label="Images",
+    #     plot_id=1,
+    #     radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
+    # )
+    # new_plot = Bokeh.Circle(
+    #     x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
+    #     y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
+    #     colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
+    #     legend_label=prompt,
+    #     radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
+    # )
+    # bokeh.add_plots([plot, new_plot])
+    # bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
+    # bokeh_iframe.loading = False
 
     print("=====================================")
     print("init Gallery")
     gallery.clean_up()
-    project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
+    # project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
     for i, info in enumerate(image_infos, 1):
-        ann_info = api.annotation.download(info.id)
-        gallery.append(info.full_storage_url, ann_info, project_meta, call_update=False)
+        # ann_info = api.annotation.download(info.id)
+        score = info.ai_search_meta.get("score")
+        gallery.append(
+            info.full_storage_url,
+            # ann_info,
+            # project_meta,
+            title=f"ID: {info.id}, Score: {score}",
+            # call_update=False,
+        )
         print(f"image {i}/{len(image_infos)} added to gallery")
     gallery._update()
     gallery.loading = False
@@ -186,7 +195,7 @@ def draw_projections_per_ids(project_id, ids, limit=20):
         "search",
         data={
             "project_id": project_id,
-            "image_ids": ids,
+            "by_image_ids": ids,
             "limit": limit,
             # "by_dataset_id": 964,
         },
@@ -198,35 +207,42 @@ def draw_projections_per_ids(project_id, ids, limit=20):
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
-    print("Init bokeh widget")
-    this_ids = set([info.id for info in image_infos])
-    bokeh.clear()
-    plot = Bokeh.Circle(
-        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
-        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
-        colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
-        legend_label="Images",
-        plot_id=1,
-        radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
-    )
-    new_plot = Bokeh.Circle(
-        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
-        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
-        colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
-        legend_label=ids,
-        radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
-    )
-    bokeh.add_plots([plot, new_plot])
-    bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
-    bokeh_iframe.loading = False
+    # print("Init bokeh widget")
+    # this_ids = set([info.id for info in image_infos])
+    # bokeh.clear()
+    # plot = Bokeh.Circle(
+    #     x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
+    #     y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
+    #     colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
+    #     legend_label="Images",
+    #     plot_id=1,
+    #     radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
+    # )
+    # new_plot = Bokeh.Circle(
+    #     x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
+    #     y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
+    #     colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
+    #     legend_label=ids,
+    #     radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
+    # )
+    # bokeh.add_plots([plot, new_plot])
+    # bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
+    # bokeh_iframe.loading = False
 
     print("=====================================")
     print("init Gallery")
     gallery.clean_up()
-    project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
+    # project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
     for i, info in enumerate(image_infos, 1):
-        ann_info = api.annotation.download(info.id)
-        gallery.append(info.full_storage_url, ann_info, project_meta, call_update=False)
+        # ann_info = api.annotation.download(info.id)
+        score = info.ai_search_meta.get("score")
+        gallery.append(
+            info.full_storage_url,
+            # ann_info,
+            title=f"ID: {info.id}, Score: {score}",
+            # project_meta,
+            # call_update=False,
+        )
         print(f"image {i}/{len(image_infos)} added to gallery")
     gallery._update()
     gallery.loading = False
@@ -304,36 +320,43 @@ def draw_diverse(project_id, sample_size, clustering_method, sampling_method):
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
-    print("Init bokeh widget")
+    # print("Init bokeh widget")
 
-    this_ids = set([info.id for info in image_infos])
-    bokeh.clear()
-    plot = Bokeh.Circle(
-        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
-        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
-        colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
-        legend_label="Images",
-        plot_id=1,
-        radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
-    )
-    new_plot = Bokeh.Circle(
-        x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
-        y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
-        colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
-        legend_label="Sample",
-        radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
-    )
-    bokeh.add_plots([plot, new_plot])
-    bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
-    bokeh_iframe.loading = False
+    # this_ids = set([info.id for info in image_infos])
+    # bokeh.clear()
+    # plot = Bokeh.Circle(
+    #     x_coordinates=[item[1][1] for item in current_items if item[0]["id"] not in this_ids],
+    #     y_coordinates=[item[1][0] for item in current_items if item[0]["id"] not in this_ids],
+    #     colors=["#222222" for item in current_items if item[0]["id"] not in this_ids],
+    #     legend_label="Images",
+    #     plot_id=1,
+    #     radii=[0.05 for item in current_items if item[0]["id"] not in this_ids],
+    # )
+    # new_plot = Bokeh.Circle(
+    #     x_coordinates=[item[1][1] for item in current_items if item[0]["id"] in this_ids],
+    #     y_coordinates=[item[1][0] for item in current_items if item[0]["id"] in this_ids],
+    #     colors=["#006400" for item in current_items if item[0]["id"] in this_ids],
+    #     legend_label="Sample",
+    #     radii=[0.05 for item in current_items if item[0]["id"] in this_ids],
+    # )
+    # bokeh.add_plots([plot, new_plot])
+    # bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="600px")
+    # bokeh_iframe.loading = False
 
     print("=====================================")
     print("init Gallery")
     gallery.clean_up()
-    project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
+    # project_meta = sly.ProjectMeta.from_json(api.project.get_meta(project_id))
     for i, info in enumerate(image_infos, 1):
-        ann_info = api.annotation.download(info.id)
-        gallery.append(info.full_storage_url, ann_info, project_meta, call_update=False)
+        # ann_info = api.annotation.download(info.id)
+        score = info.ai_search_meta.get("score")
+        gallery.append(
+            info.full_storage_url,
+            # ann_info,
+            # project_meta,
+            title=f"ID: {info.id}, Score: {score}",
+            # call_update=False,
+        )
         print(f"image {i}/{len(image_infos)} added to gallery")
     gallery._update()
     gallery.loading = False
@@ -342,7 +365,8 @@ def draw_diverse(project_id, sample_size, clustering_method, sampling_method):
 @load_project.click
 def load_project_click():
     project_id = select_project.get_selected_id()
-    draw_all_projections(project_id)
+    force = force_checkbox.is_checked()
+    draw_all_projections(project_id, force=force)
 
 
 @prompt_search_button.click
@@ -375,7 +399,11 @@ def diverse_click():
     draw_diverse(project_id, sample_size, clustering_method, sampling_method)
 
 
-card_1 = Card(title="1️⃣ Generate Embeddings", content=load_project)
+card_1 = Card(
+    title="1️⃣ Generate Embeddings",
+    content=Container(widgets=[load_project, force_checkbox]),
+    description="You must generate embeddings for project before searching",
+)
 card_2 = Card(
     title="2️⃣ Search",
     content=Container(
