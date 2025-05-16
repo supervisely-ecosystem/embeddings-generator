@@ -3,7 +3,7 @@ from typing import Dict, List
 import supervisely as sly
 from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 
-from src.utils import ImageInfoLite, get_key
+from src.utils import ImageInfoLite, get_key, to_thread
 
 
 class SearchCache:
@@ -17,6 +17,7 @@ class SearchCache:
 
     SYSTEM_NAME_PREFIX = "AI Search Collection: "
 
+    @to_thread
     def __init__(self, api: sly.Api, project_id: int, prompt: str, settings: Dict):
         """
         Initialize the cache.
@@ -34,14 +35,17 @@ class SearchCache:
         self.project_id = project_id
         self.project_info = api.project.get_info_by_id(project_id)
         self.team_id = self.project_info.team_id
-        self.collection_id: int = None
-        self.updated_at: str = None
         self.prompt_text = prompt
         self.settings = settings
         self.key = get_key(prompt, project_id, settings)
         self.cache_collection_name = self.SYSTEM_NAME_PREFIX + f"Unique Key - {self.key}"
-        self.load()
+        collection = self.api.entities_collection.get_info_by_ai_search_key(
+            self.project_id, self.key
+        )
+        self.collection_id = collection.id if collection else None
+        self.updated_at = collection.updated_at if collection else None
 
+    @to_thread
     def save(self, results: List[ImageInfoLite]) -> int:
         """
         Save the current cache as Entities Collection with the given name and unique key.
@@ -65,6 +69,7 @@ class SearchCache:
 
         return self.collection_id
 
+    @to_thread
     def load(self):
         """
         Search the Enitites Collection with the unique key in the storage.
@@ -76,8 +81,24 @@ class SearchCache:
         self.collection_id = collection.id if collection else None
         self.updated_at = collection.updated_at if collection else None
 
+    @to_thread
     def clear(self):
         """Clear the cache and remove Entities Collection."""
-        self.api.entities_collection.remove(self.collection_id)
+        self.api.entities_collection.remove(self.collection_id, force=True)
         self.collection_id = None
         self.updated_at = None
+
+    @staticmethod
+    @to_thread
+    def drop_cache(api: sly.Api, project_id: int):
+        """Delete all AI Collections in the project."""
+
+        collections = api.entities_collection.get_list(project_id, type=CollectionType.AI_SEARCH)
+        for collection in collections:
+            try:
+                api.entities_collection.remove(collection.id, force=True)
+            except Exception as e:
+                sly.logger.warning(
+                    f"Failed to remove collection {collection.name} ({collection.id})"
+                    f" in project {project_id}: {e}"
+                )

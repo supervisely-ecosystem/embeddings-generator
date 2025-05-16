@@ -32,8 +32,9 @@ from src.utils import (
     parse_timestamp,
     run_safe,
     send_request,
+    set_embeddings_in_progress,
+    set_embeddings_updated_at,
     timeit,
-    update_embeddings_updated_at,
     update_id_by_hash,
 )
 from src.visualization import (
@@ -79,23 +80,23 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     )
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
 
+    # Step 0: Check if embeddings are already up to date.
+    if not event.force and project_info.is_embeddings_updated:
+        message = f"Embeddings are up to date for project {event.project_id}. Skipping."
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message})
+
+    # Step 1: Check if embeddings are already in progress.
     if project_info.embeddings_in_progress:
         message = (
             f"Embeddings creation is already in progress for project {event.project_id}. Skipping."
         )
         sly.logger.info(message)
         return JSONResponse({ResponseFields.MESSAGE: message})
-    if not event.force:
-        if project_info.embeddings_updated_at is not None and parse_timestamp(
-            project_info.embeddings_updated_at
-        ) >= parse_timestamp(project_info.updated_at):
-            message = f"Embeddings are up to date for project {event.project_id}. Skipping."
-            sly.logger.info(message)
-            return JSONResponse({ResponseFields.MESSAGE: message})
 
     async def execute():
         try:
-            api.project.set_embeddings_in_progress(event.project_id, True)
+            await set_embeddings_in_progress(event.project_id, True)
 
             if event.image_ids:
                 image_infos = await image_get_list_async(
@@ -104,25 +105,25 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             else:
                 image_infos = await image_get_list_async(api, event.project_id)
 
-            # Step 2: If force is True, delete existing collection items.
+            # Step 2: If force is True, delete existing collection items and save their payloads.
+            current_payloads = None
             if event.force:
                 sly.logger.debug(
                     "Force enabled for project %s, will recreate items in collection %s.",
                     event.project_id,
                     qdrant.IMAGES_COLLECTION,
                 )
-                await qdrant.delete_collection_items(image_infos)
+                current_payloads = await qdrant.delete_collection_items(image_infos)
 
             # Step 3: Process images.
-            image_infos = await process_images(api, event.project_id, image_infos=image_infos)
-            # image_hashes = [info.hash for info in image_infos]
-
-            # if event.image_ids is None and len(image_infos) > 0:
+            image_infos = await process_images(
+                api, event.project_id, image_infos=image_infos, payloads=current_payloads
+            )
+            #! continue form here
             if len(image_infos) > 0:
-                # Step 4: Update embeddings data.
-                # project_info = await get_project_info(api, event.project_id)
-                await update_embeddings_updated_at(api, event.project_id)
-                #! delete all ai search collections from cache and update datetime every run
+                # Step 4: Update embeddings timestamp for images and delete all AI collections in the project as they are outdated.
+                await set_embeddings_updated_at(api, image_infos)
+                await SearchCache.drop_cache(event.project_id)
 
             sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
 
@@ -140,23 +141,15 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     event.project_id,
                     len(image_infos),
                 )
-                # collection_id = await create_collection_and_populate(
-                #     api=api,
-                #     project_id=event.project_id,
-                #     name=f"Embeddings for {event.project_id}",
-                #     image_ids=[info.id for info in image_infos],
-                #     event=EventFields.EMBEDDINGS,
-                # )
-                api.project.set_embeddings_in_progress(event.project_id, False)
+                await set_embeddings_in_progress(event.project_id, False)
                 return JSONResponse(
                     {
-                        # ResponseFields.COLLECTION_ID: collection_id,
                         ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
                         ResponseFields.VECTORS: vectors,
                     }
                 )
             else:
-                api.project.set_embeddings_in_progress(event.project_id, False)
+                await set_embeddings_in_progress(event.project_id, False)
                 message = f"Embeddings creation for project {event.project_id} has been completed."
                 sly.logger.info(message)
                 return JSONResponse({ResponseFields.MESSAGE: message})
@@ -164,7 +157,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             sly.logger.error(
                 "Error while creating embeddings for project %s: %s", event.project_id, str(e)
             )
-            api.project.set_embeddings_in_progress(event.project_id, False)
+            await set_embeddings_in_progress(event.project_id, False)
             return JSONResponse(
                 {
                     ResponseFields.MESSAGE: f"Error while creating embeddings for project {event.project_id}: {str(e)}"
@@ -225,7 +218,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         if cache.project_info.embeddings_updated_at is None:
             # If the project has no embeddings, invalidate the cache.
             sly.logger.info("Project %s has no embeddings. Invalidating cache.", event.project_id)
-            cache.clear()
+            await cache.clear()
         elif parse_timestamp(cache.updated_at) < parse_timestamp(
             cache.project_info.embeddings_updated_at
         ):
@@ -233,7 +226,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             sly.logger.info(
                 "Cached search results are older than the project update. Invalidating cache."
             )
-            cache.clear()
+            await cache.clear()
         else:
             sly.logger.info("Using cached search results")
             return {ResponseFields.COLLECTION_ID: cache.collection_id}
@@ -340,7 +333,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     if len(results) == 0:
         return {ResponseFields.MESSAGE: "No similar images found."}
     # Cache the results before returning them
-    collection_id = cache.save(results)
+    collection_id = await cache.save(results)
     return {ResponseFields.COLLECTION_ID: collection_id}
 
 

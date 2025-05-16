@@ -7,18 +7,12 @@ from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.conversions import common_types as types
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
+from qdrant_client.models import (Batch, CollectionInfo, Distance,
+                                  OverwritePayloadOperation, VectorParams)
 
 import src.globals as g
-from src.utils import (
-    ImageInfoLite,
-    QdrantFields,
-    TupleFields,
-    parse_timestamp,
-    prepare_ids,
-    timeit,
-    with_retries,
-)
+from src.utils import (ImageInfoLite, QdrantFields, TupleFields,
+                       parse_timestamp, prepare_ids, timeit, with_retries)
 
 
 def create_client_from_url(url: str) -> AsyncQdrantClient:
@@ -170,21 +164,26 @@ def get_search_filter(
 @with_retries()
 async def delete_collection_items(
     image_infos: List[sly.ImageInfo], collection_name: str = IMAGES_COLLECTION
-) -> None:
+) -> Dict[str, Any]:
     """Delete a collection items with the specified IDs.
     For IMAGES_COLLECTION IDs must be strings, that are UUIDs of the images.
+    Returns the payloads of the deleted items.
 
     :param image_infos: A list of ImageInfo objects to delete.
     :type image_infos: List[ImageInfo]
     :param collection_name: The name of the collection to delete items from, defaults to IMAGES_COLLECTION.
     :type collection_name: str
+    :return: The payloads of the deleted items.
+    :rtype: Dict[str, Any]
     """
     ids = await prepare_ids(image_infos)
 
     sly.logger.debug("Deleting items from collection %s...", ids)
     try:
+        payloads = await get_item_payloads(collection_name, ids)
         await client.delete(collection_name, ids)
         sly.logger.debug("Items %s deleted.", ids)
+        return payloads
     except UnexpectedResponse:
         sly.logger.debug("Something went wrong, while deleting %s .", ids)
 
@@ -341,27 +340,37 @@ async def upsert(
 
 @with_retries()
 @timeit
-async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> List[ImageInfoLite]:
+async def get_diff(
+    collection_name: str,
+    image_infos: List[ImageInfoLite],
+    payloads: Optional[Dict[str, Dict]] = None,
+    ids: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
     """Get the difference between ImageInfoLite objects and points from the collection.
-    Returns ImageInfoLite objects that need to be updated.
+    Returns a dictionary with IDs as keys and dictionaries with ImageInfoLite objects and ImageReferences objects as values.
 
     :param collection_name: The name of the collection to get items from.
     :type collection_name: str
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
-    :return: A list of ImageInfoLite objects that need to be updated.
-    :rtype: List[ImageInfoLite]
+    :param payloads: A dictionary with payloads to update the points in the collection.
+    :type payloads: Optional[Dict[str, Dict]], optional
+    :param ids: A list of IDs to get from the collection.
+    :type ids: Optional[List[str]], optional
+    :return: A dictionary with IDs as keys and dictionaries with ImageInfoLite objects and ImageReferences objects as values.
+    :rtype: Dict[str, Dict[str, Any]]
     """
     # Get specified ids from collection, compare updated_at and return ids that need to be updated.
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
 
-    ids = prepare_ids(image_infos)
+    if ids is None:
+        ids = prepare_ids(image_infos)
 
     points = await client.retrieve(collection_name, ids, with_payload=True)
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
 
-    diff, refs = _diff(image_infos, points)
+    diff = _diff(ids, image_infos, points, payloads)
 
     sly.logger.debug("Found %d points that need to be updated.", len(diff))
     if sly.is_development():
@@ -375,45 +384,74 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
             percent,
         )
 
-    return diff, refs
+    return diff
 
 
 @timeit
 def _diff(
-    image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]
+    ids: List[str],
+    image_infos: List[ImageInfoLite],
+    points: List[Dict[str, Any]],
+    payloads: Optional[Dict[str, Dict]] = None,
 ) -> Tuple[List[ImageInfoLite], List[ImageReferences]]:
-    """Compare ImageInfoLite objects with points from the collection and return the difference.
-    Uses updated_at field to compare points.
-    Returns ImageInfoLite objects that need to be updated and reference ids that represent in which projects or datasets
-    the image is used.
+    """Get the difference between ImageInfoLite objects and points from the collection.
+    Uses payloads to check if need to update the points or only their payload in the collection.
+    Returns dict with IDs as keys and dicts with ImageInfoLite objects and ImageReferences objects as values.
 
+    :param ids: A list of IDs to get from the collection.
+    :type ids: Optional[List[str]], optional
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     :param points: A list of dictionaries with points from the collection.
     :type points: List[Dict[str, Any]]
-    :return: A list of ImageInfoLite objects that need to be updated
-            and a list of ImageReferences objects with infromation about Image IDs, Project IDs and Dataset IDs
-            to which the image belongs.
-    :rtype: Tuple[List[ImageInfoLite], List[ImageReferences]]
+    :param payloads: A dictionary with payloads to update the points in the collection.
+    :type payloads: Optional[Dict[str, Dict]], optional
+
+    :return: Dictionary with IDs as keys and dicts with ImageInfoLite objects and ImageReferences objects as values.
+    :rtype: Dict[str, Dict[str, Any]]
     """
+    if len(image_infos) != len(ids):
+        raise ValueError(
+            "Length of image_infos and ids must be the same. "
+            f"Got {len(image_infos)} and {len(ids)}."
+        )
     # If the point with the same id doesn't exist in the collection, it will be added to the diff.
-    # If the point with the same id exsts - check if updated_at is exactly the same, or add to the diff.
-    diff = []
-    refs = []
-    points_dict = {point.payload.get(TupleFields.HASH): point for point in points}
+    # If the point with the same id exsts - check if IDs are in the payload, if not - add them to the diff.
+    diff = {point_id: {} for point_id in ids}
+    points_dict = {}
+    for point in points:
+        if point.payload.get(TupleFields.HASH) is not None:
+            points_dict[point.payload.get(TupleFields.HASH)] = point
+        elif point.payload.get(TupleFields.LINK) is not None:
+            points_dict[point.payload.get(TupleFields.LINK)] = point
 
-    for image_info in image_infos:
-        point = points_dict.get(image_info.hash)
+    for point_id, image_info in zip(ids, image_infos):
+        if image_info.hash is not None:
+            point = points_dict.get(image_info.hash)
+        elif image_info.link is not None:
+            point = points_dict.get(image_info.link)
         if point is None:
-            diff.append(image_info)
-            refs.append(None)
-        elif parse_timestamp(point.payload.get(TupleFields.UPDATED_AT)) < parse_timestamp(
-            image_info.updated_at
-        ):
-            diff.append(image_info)
-            refs.append(ImageReferences(point.payload))
-
-    return diff, refs
+            diff[point_id]["info"] = image_info
+            diff[point_id]["payload"] = None
+            continue
+        payload = payloads.get(point_id) if payloads else None
+        if payload is None:
+            continue
+        update_payload = False
+        if image_info.id not in point.payload.get(QdrantFields.IMAGE_IDS, []):
+            point.payload[QdrantFields.IMAGE_IDS].append(image_info.id)
+            update_payload = True
+        if image_info.dataset_id not in point.payload.get(QdrantFields.DATASET_IDS, []):
+            point.payload[QdrantFields.DATASET_IDS].append(image_info.dataset_id)
+            update_payload = True
+        if image_info.project_id not in point.payload.get(QdrantFields.PROJECT_IDS, []):
+            point.payload[QdrantFields.PROJECT_IDS].append(image_info.project_id)
+            update_payload = True
+        if update_payload:
+            diff[point_id]["info"] = None
+            diff[point_id]["payload"] = point.payload
+    diff = {k: v for k, v in diff.items() if v}
+    return diff
 
 
 @timeit
@@ -553,6 +591,62 @@ async def get_items(
         ImageInfoLite(id=None, project_id=None, dataset_id=None, **point.payload)
         for point in points
     ], [point.vector for point in points]
+
+
+@with_retries()
+async def get_item_payloads(collection_name: str, ids=List[str]) -> Dict[str, Any]:
+    """
+    Get payloads of items from the collection based on the specified IDs.
+    IDs that don't exist in the collection will have None as their payload value.
+
+    :param collection_name: The name of the collection to get items from.
+    :type collection_name: str
+    :param ids: The IDs of the items to return.
+    :type ids: List[Union[int, str]]
+    :return: A dictionary with ID keys and payload values.
+    :rtype: Dict[str, Any]
+    """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
+
+    points = await client.retrieve(
+        collection_name,
+        ids,
+        with_payload=True,
+        with_vectors=False,
+    )
+    sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
+
+    # Create initial dictionary with all IDs set to None
+    result = {str(id_): None for id_ in ids}
+
+    # Update with actual payloads for IDs that exist
+    for point in points:
+        result[str(point.id)] = point.payload
+
+    return result
+
+
+@with_retries()
+async def update_payloads(collection_name: str, id_to_payload: Dict[str, Dict]) -> None:
+    """Update payloads of items in the collection based on the specified IDs.
+
+    :param collection_name: The name of the collection to update items in.
+    :type collection_name: str
+    :param id_to_payload: A dictionary with ID keys and payload values.
+    :type id_to_payload: Dict[str, Dict]
+    """
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
+
+    await client.batch_update_points(
+        collection_name,
+        update_operations=[
+            OverwritePayloadOperation(id=point_id, payload=payload)
+            for point_id, payload in id_to_payload.items()
+        ],
+        wait=False,  #! TODO: check if this is correct
+    )
 
 
 @timeit

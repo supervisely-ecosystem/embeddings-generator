@@ -11,8 +11,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import (CollectionItem,
-                                                     CollectionType)
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 
@@ -21,6 +20,7 @@ class TupleFields:
 
     ID = "id"
     HASH = "hash"
+    LINK = "link"
     DATASET_ID = "dataset_id"
     PROJECT_ID = "project_id"
     FULL_URL = "full_url"
@@ -130,6 +130,7 @@ class ImageInfoLite:
     dataset_id: int
     project_id: int
     hash: str
+    link: str
     full_url: str
     cas_url: str
     updated_at: str  # or datetime.datetime if you parse it
@@ -141,6 +142,7 @@ class ImageInfoLite:
             TupleFields.DATASET_ID: self.dataset_id,
             TupleFields.PROJECT_ID: self.project_id,
             TupleFields.HASH: self.hash,
+            TupleFields.LINK: self.link,
             TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.UPDATED_AT: self.updated_at,
@@ -155,6 +157,7 @@ class ImageInfoLite:
             dataset_id=data[TupleFields.DATASET_ID],
             project_id=data[TupleFields.PROJECT_ID],
             hash=data[TupleFields.HASH],
+            link=data[TupleFields.LINK],
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             updated_at=data[TupleFields.UPDATED_AT],
@@ -299,7 +302,7 @@ def get_project_info(api: sly.Api, project_id: int) -> sly.ProjectInfo:
     :return: Project info.
     :rtype: sly.ProjectInfo
     """
-    return api.project.get_info_by_id(project_id)
+    return api.project.get_info_by_id(project_id, with_embeddings_info=True)
 
 
 @to_thread
@@ -382,8 +385,21 @@ def get_pcd_by_name(
 
 @to_thread
 @timeit
-def update_embeddings_updated_at(api: sly.Api, project_id: int, timestamp: str = None):
-    return api.project.set_embeddings_updated_at(project_id, timestamp)
+def set_embeddings_updated_at(
+    api: sly.Api,
+    image_infos: List[Union[sly.ImageInfo, ImageInfoLite]],
+    timestamp: str = None,
+):
+    """Sets the embeddings updated at timestamp for the images."""
+    ids = [image_info.id for image_info in image_infos]
+    api.image.set_embeddings_updated_at(ids, timestamp)
+
+
+@to_thread
+@timeit
+def set_embeddings_in_progress(api: sly.Api, project_id: int, in_progress: bool):
+    """Sets the embeddings in progress flag for the project."""
+    api.project.set_embeddings_in_progress(project_id, in_progress)
 
 
 @to_thread
@@ -434,6 +450,7 @@ async def get_lite_image_infos(
             dataset_id=image_info.dataset_id,
             project_id=project_id,
             hash=image_info.hash,
+            link=image_info.link,
             full_url=image_info.full_storage_url,
             cas_url=resize_image_url(
                 image_info.full_storage_url,
@@ -529,6 +546,7 @@ async def image_get_list_async(
     dataset_id: int = None,
     images_ids: List[int] = None,
     per_page: int = 500,
+    with_embeddings_updated_at: bool = True,
 ) -> List[sly.ImageInfo]:
     method = "images.list"
     base_data = {
@@ -536,6 +554,8 @@ async def image_get_list_async(
         ApiField.FORCE_METADATA_FOR_LINKS: False,
         ApiField.PER_PAGE: per_page,
     }
+    if with_embeddings_updated_at:
+        base_data[ApiField.EXTRA_FIELDS] = [ApiField.EMBEDDINGS_UPDATED_AT]
     if dataset_id is not None:
         base_data[ApiField.DATASET_ID] = dataset_id
 

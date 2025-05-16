@@ -16,8 +16,9 @@ from src.utils import (
     get_project_info,
     get_team_info,
     parse_timestamp,
+    prepare_ids,
+    set_embeddings_updated_at,
     timeit,
-    update_embeddings_updated_at,
 )
 
 
@@ -28,6 +29,7 @@ async def process_images(
     dataset_id: int = None,
     image_ids: List[int] = None,
     image_infos: List[sly.ImageInfo] = None,
+    payloads: dict = None,
 ) -> None:
     """Process images from the specified project. Download images, save them to HDF5,
     get vectors from the images and upsert them to Qdrant.
@@ -47,6 +49,8 @@ async def process_images(
     :type image_ids: List[int], optional
     :param image_infos: List of image infos to process.
     :type image_infos: List[sly.ImageInfo], optional
+    :param payloads: Payloads to be used for images to update.
+    :type payloads: dict, optional
     """
     # Get image infos from the project.
     image_infos = await get_lite_image_infos(
@@ -57,28 +61,39 @@ async def process_images(
         image_ids=image_ids,
         image_infos=image_infos,
     )
-
-    # await qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION)
-    # if await qdrant.collection_exists(qdrant.IMAGES_COLLECTION):
-    
+    ids = await prepare_ids(image_infos)
+    if payloads is None:
+        payloads = await qdrant.get_item_payloads(collection_name=qdrant.IMAGES_COLLECTION, ids=ids)
     # Get diff of image infos, check if they are already
     # in the Qdrant collection and have the same updated_at field.
-    image_infos, references = await qdrant.get_diff(qdrant.IMAGES_COLLECTION, image_infos)
-    #! how to effectively update payload for images if no need to get vectors?
+    id_to_info_map = {point_id: image_info for point_id, image_info in zip(ids, image_infos)}
+    diff = await qdrant.get_diff(
+        collection_name=qdrant.IMAGES_COLLECTION,
+        image_infos=image_infos,
+        payloads=payloads,
+        ids=ids,
+    )
 
-    if len(image_infos) == 0:
+    if len(diff) == 0:
         logger.debug("All images are up-to-date.")
         return image_infos
 
     current_progress = 0
-    total_progress = len(image_infos)
-    logger.debug("Images to be processed: %d.", total_progress)
+    total_progress = len(diff)
+
+    update_payloads = {}
+    image_infos = []
+    references = []
+    for point_id, diff_dict in diff.items():
+        if diff_dict["info"] is not None:
+            image_infos.append(diff_dict["info"])
+            img_refs = qdrant.ImageReferences(diff_dict["payload"])
+            references.append(img_refs)
+        elif diff_dict["payload"] is not None:
+            update_payloads[point_id] = diff_dict["payload"]
+    logger.debug("Images to be processed: %d.", total_progress)    
     for image_batch, references_batch in zip(sly.batched(image_infos), sly.batched(references)):
         # Get vectors from images.
-        # base64_data = [await base64_from_url(image_info.cas_url) for image_info in image_batch]
-        # vectors_batch = await cas.get_vectors(
-        #     base64_data
-        # )
         vectors_batch = await cas.get_vectors([image_info.cas_url for image_info in image_batch])
         vectors_batch = fix_vectors(vectors_batch)
         logger.debug("Got %d vectors from images.", len(vectors_batch))
@@ -92,6 +107,7 @@ async def process_images(
             current_progress,
             total_progress,
         )
+    await qdrant.update_payloads(update_payloads) #! finish it
     logger.debug("All %d images have been processed.", total_progress)
     return image_infos
 
@@ -141,7 +157,7 @@ async def update_embeddings(
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
     if len(image_infos) > 0:
-        await update_embeddings_updated_at(api, project_id)
+        await set_embeddings_updated_at(api, image_infos)
 
 
 @timeit
