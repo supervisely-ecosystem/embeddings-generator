@@ -696,3 +696,26 @@ async def get_single_point(
         "This function is too slow, need to find an option to get farthest point from Qdrant."
     )
     # image_infos, vectors = await search(collection_name, vector, limit, return_vectors=True)
+
+
+@timeit
+async def is_project_in_qdrant(project_id: int) -> bool:
+    """Check if any point of Qdrant collection has the specified project ID in its payload.
+
+    :param project_id: The ID of the project to check.
+    :type project_id: int
+    :return: True if the project is in Qdrant, False otherwise.
+    :rtype: bool
+    """
+    filter = get_search_filter(project_id=project_id)
+    try:
+        points, _ = await client.scroll(
+            collection_name=IMAGES_COLLECTION,
+            limit=1,
+            scroll_filter=filter,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return len(points) > 0
+    except UnexpectedResponse:
+        return None

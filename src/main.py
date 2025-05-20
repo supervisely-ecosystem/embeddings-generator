@@ -174,6 +174,49 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     )
 
 
+@app.event(Event.UpdateEmbeddingsPayload, use_state=True)
+@timeit
+async def update_embeddings_payload(api: sly.Api, event: Event.Embeddings) -> None:
+    """
+    Updates the embeddings payload for all images in the project.
+    This is useful when you want to update the embeddings without recalculating them.
+    """
+    sly.logger.info(
+        f"Started updating embeddings payload for project {event.project_id}",
+        extra={"project_id": event.project_id},
+    )
+    project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+
+    # Step 0: Check if embeddings in progress.
+    if project_info.embeddings_in_progress:
+        message = (
+            f"Embeddings creation is already in progress for project {event.project_id}. Skipping."
+        )
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message})
+
+    in_qdrant = await qdrant.is_project_in_qdrant(event.project_id)
+
+    if in_qdrant is None:
+        message = f"It is not possible to detect if project {event.project_id} has items in Qdrant. Will be skipped."
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message})
+
+    # Step 1: Check if any point in qdrant belongs to this project.
+    if project_info.is_embeddings_updated and not in_qdrant:
+        message = (
+            f"Project {event.project_id} has no relative points in Qdrant. Payload will be updated."
+        )
+
+    # Step 2: Update payloads for images.
+    image_infos = await image_get_list_async(api, event.project_id)
+    if image_infos is None or len(image_infos) == 0:
+        return {ResponseFields.MESSAGE: "Project is empty."}
+
+    #! change method
+    image_infos = await process_images(api, event.project_id, image_infos=image_infos)
+
+
 @app.event(Event.Search, use_state=True)
 @timeit
 async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
@@ -228,6 +271,15 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     image_infos = await image_get_list_async(api, event.project_id)
     if image_infos is None or len(image_infos) == 0:
         return {ResponseFields.MESSAGE: "Project is empty."}
+
+    in_qdrant = await qdrant.is_project_in_qdrant(event.project_id)
+    if in_qdrant is None:
+        pass
+    elif not in_qdrant and cache.project_info.is_embeddings_updated:
+        # If the project has no points in Qdrant and embeddings are up to date, we need to update points payloads.
+        message = f"Project {event.project_id} has no relative points in Qdrant, but embeddings are up to date. Payloads will be updated."
+        sly.logger.info(message)
+        await process_images(api, event.project_id, image_infos=image_infos)  #! change method
 
     text_prompts = []
     if event.prompt:

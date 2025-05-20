@@ -28,6 +28,16 @@ class Event:
                 data.get(EventFields.RETURN_VECTORS),
             )
 
+    class UpdateEmbeddingsPayload:
+        endpoint = "/update_embeddings_payload"
+
+        def __init__(self, project_id: int):
+            self.project_id = project_id
+
+        @classmethod
+        def from_json(cls, data: Dict[str, Any]):
+            return cls(data.get(EventFields.PROJECT_ID))
+
     class Search:
         """
         Could be used for searching images by prompt or by image IDs.

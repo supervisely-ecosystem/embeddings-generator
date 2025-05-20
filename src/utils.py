@@ -392,6 +392,7 @@ def set_embeddings_updated_at(
 ):
     """Sets the embeddings updated at timestamp for the images."""
     ids = [image_info.id for image_info in image_infos]
+    ids = list(set(ids))
     api.image.set_embeddings_updated_at(ids, timestamp)
 
 
@@ -623,11 +624,9 @@ async def embeddings_up_to_date(
 ):
     if project_info is None:
         project_info = await get_project_info(api, project_id)
-    if project_info.embeddings_updated_at is None:
+    if project_info.is_embeddings_updated is None:
         return False
-    return parse_timestamp(project_info.embeddings_updated_at) >= parse_timestamp(
-        project_info.updated_at
-    )
+    return project_info.is_embeddings_updated
 
 
 async def get_list_all_pages_async(

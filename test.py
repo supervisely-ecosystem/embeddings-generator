@@ -16,6 +16,7 @@ from supervisely.app.widgets import (
     InputNumber,
     RadioTabs,
     Select,
+    SelectDataset,
     SelectProject,
     Text,
 )
@@ -37,12 +38,14 @@ bokeh = Bokeh([])
 bokeh_iframe = IFrame()
 bokeh_iframe.set(bokeh.html_route_with_timestamp, height="650px", width="100%")
 select_project = SelectProject(default_id=project_id, compact=False, workspace_id=workspace_id)
+select_dataset = SelectDataset(default_id=None, compact=True, project_id=project_id)
 prompt_search = Input(placeholder="Search query")
 image_search = Input(placeholder="Image IDs")
 gallery = GridGallery(5)
 prompt_search_button = Button("Prompt Search")
 image_search_button = Button("Image Search")
 load_project = Button("Generate")
+update_payload = Button("Update Payload")
 force_checkbox = Checkbox(content="Force update")
 tabs = RadioTabs(
     titles=["Gallery", "Plot"],
@@ -71,6 +74,13 @@ methods_container = Container(
     widgets=[clustering_container, sampling_container, limit_container],
     direction="horizontal",
 )
+
+
+def sort_by_score(image_infos):
+    """
+    Sorts image_infos by score in descending order.
+    """
+    return sorted(image_infos, key=lambda x: x.ai_search_meta.get("score", 0), reverse=True)
 
 
 def draw_all_projections(project_id, force):
@@ -120,7 +130,7 @@ def draw_all_projections(project_id, force):
     # bokeh_iframe.loading = False
 
 
-def draw_projections_per_prompt(project_id, prompt, limit=20):
+def draw_projections_per_prompt(project_id, prompt, limit=20, dataset_id=None):
     gallery.loading = True
     bokeh_iframe.loading = True
 
@@ -133,13 +143,14 @@ def draw_projections_per_prompt(project_id, prompt, limit=20):
             "project_id": project_id,
             "prompt": prompt,
             "limit": limit,
-            # "by_dataset_id": 964,
+            "dataset_id": dataset_id,
         },
     )
     image_collection_id = r.get("collection_id")
     image_infos = api.entities_collection.get_items(
         image_collection_id, CollectionTypeFilter.AI_SEARCH
     )
+    image_infos = sort_by_score(image_infos)
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
@@ -197,13 +208,14 @@ def draw_projections_per_ids(project_id, ids, limit=20):
             "project_id": project_id,
             "by_image_ids": ids,
             "limit": limit,
-            # "by_dataset_id": 964,
+            "dataset_id": 964,
         },
     )
     image_collection_id = r.get("collection_id")
     image_infos = api.entities_collection.get_items(
         image_collection_id, CollectionTypeFilter.AI_SEARCH
     )
+    image_infos = sort_by_score(image_infos)
     print(f"Got {len(image_infos)} images")
     print("=====================================")
 
@@ -362,6 +374,18 @@ def draw_diverse(project_id, sample_size, clustering_method, sampling_method):
     gallery.loading = False
 
 
+def update_project_payload(project_id):
+    print("=====================================")
+    print("Sending request to update_payload...")
+    r = api.task.send_request(
+        embeddings_generator_task_id,
+        "update_embeddings_payload",
+        data={"project_id": project_id},
+    )
+    print(f"Got {len(r)} images")
+    print("=====================================")
+
+
 @load_project.click
 def load_project_click():
     project_id = select_project.get_selected_id()
@@ -369,11 +393,19 @@ def load_project_click():
     draw_all_projections(project_id, force=force)
 
 
+@update_payload.click
+def update_payload_click():
+    project_id = select_project.get_selected_id()
+    update_project_payload(project_id)
+
+
 @prompt_search_button.click
 def search_click():
     prompt = prompt_search.get_value()
     project_id = select_project.get_selected_id()
-    draw_projections_per_prompt(project_id, prompt)
+    dataset_id = select_dataset.get_selected_id()
+    limit = limit_size_input.get_value()
+    draw_projections_per_prompt(project_id, prompt, dataset_id=dataset_id, limit=limit)
 
 
 @image_search_button.click
@@ -381,7 +413,8 @@ def image_search_click():
     ids = image_search.get_value()
     ids = [int(i) for i in ids.split(", ")]
     project_id = select_project.get_selected_id()
-    draw_projections_per_ids(project_id, ids)
+    limit = limit_size_input.get_value()
+    draw_projections_per_ids(project_id, ids, limit=limit)
 
 
 @clusters_button.click
@@ -399,21 +432,35 @@ def diverse_click():
     draw_diverse(project_id, sample_size, clustering_method, sampling_method)
 
 
+@select_project.value_changed
+def select_project_change(project_id):
+    select_dataset.set_project_id(project_id)
+
+
+card_0 = Card(
+    title="0️⃣ Utility",
+    content=Container(widgets=[update_payload]),
+    description="This section is for utility functions",
+)
+
 card_1 = Card(
     title="1️⃣ Generate Embeddings",
     content=Container(widgets=[load_project, force_checkbox]),
     description="You must generate embeddings for project before searching",
 )
+
+container_card_0_1 = Container(widgets=[card_0, card_1], direction="horizontal")
+
 card_2 = Card(
     title="2️⃣ Search",
     content=Container(
         widgets=[
             Container(
-                widgets=[prompt_search, prompt_search_button],
+                widgets=[prompt_search, limit_size_input, select_dataset, prompt_search_button],
                 style="flex: 1 1 auto;/* display: flex; */",
             ),
             Container(
-                widgets=[image_search, image_search_button],
+                widgets=[image_search, limit_size_input, image_search_button],
                 style="flex: 1 1 auto;/* display: flex; */",
             ),
         ],
@@ -429,5 +476,5 @@ container_cards_3_4 = Container(
     widgets=[card_3, card_4],
     direction="horizontal",
 )
-layout = Container(widgets=[select_project, card_1, card_2, container_cards_3_4, tabs])
+layout = Container(widgets=[select_project, container_card_0_1, card_2, container_cards_3_4, tabs])
 app = sly.Application(layout=layout)
