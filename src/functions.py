@@ -81,7 +81,7 @@ async def process_images(
     current_progress = 0
     total_progress = len(diff)
 
-    update_payloads = {}
+    to_update_payloads = {}
     image_infos = []
     references = []
     for point_id, diff_dict in diff.items():
@@ -92,7 +92,7 @@ async def process_images(
             )
             references.append(img_refs)
         elif diff_dict["payload"] is not None:
-            update_payloads[point_id] = diff_dict["payload"]
+            to_update_payloads[point_id] = diff_dict["payload"]
     logger.debug("Images to be processed: %d.", total_progress)
     for image_batch, references_batch in zip(sly.batched(image_infos), sly.batched(references)):
         # Get vectors from images.
@@ -110,9 +110,9 @@ async def process_images(
             total_progress,
         )
         await set_embeddings_updated_at(api, image_batch)
-    if len(update_payloads) > 0:
+    if len(to_update_payloads) > 0:
         await qdrant.update_payloads(
-            collection_name=qdrant.IMAGES_COLLECTION, id_to_payload=update_payloads
+            collection_name=qdrant.IMAGES_COLLECTION, id_to_payload=to_update_payloads
         )
     logger.debug("All %d images have been processed.", total_progress)
     return image_infos

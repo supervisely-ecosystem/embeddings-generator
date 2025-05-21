@@ -30,6 +30,7 @@ from src.utils import (
     get_project_info,
     image_get_list_async,
     parse_timestamp,
+    prepare_ids,
     run_safe,
     send_request,
     set_embeddings_in_progress,
@@ -195,7 +196,7 @@ async def update_embeddings_payload(api: sly.Api, event: Event.Embeddings) -> No
         sly.logger.info(message)
         return JSONResponse({ResponseFields.MESSAGE: message})
 
-    in_qdrant = await qdrant.is_project_in_qdrant(event.project_id)
+    in_qdrant = await qdrant.populate_payloads(event.project_id)
 
     if in_qdrant is None:
         message = f"It is not possible to detect if project {event.project_id} has items in Qdrant. Will be skipped."
@@ -211,7 +212,7 @@ async def update_embeddings_payload(api: sly.Api, event: Event.Embeddings) -> No
     # Step 2: Update payloads for images.
     image_infos = await image_get_list_async(api, event.project_id)
     if image_infos is None or len(image_infos) == 0:
-        return {ResponseFields.MESSAGE: "Project is empty."}
+        return JSONResponse({ResponseFields.MESSAGE: "Project is empty."})
 
     #! change method
     image_infos = await process_images(api, event.project_id, image_infos=image_infos)
@@ -229,160 +230,170 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # response =api.task.send_request(task_id, "search", data) # Do not skip response.
     # returns a list of ImageInfoLite objects for each query.
     # response: List[List[Dict]]
+    try:
+        sly.logger.info(
+            f"Searching for similar images in project {event.project_id}",
+            extra={
+                "prompt": event.prompt,
+                "by_image_ids": event.by_image_ids,
+                "limit": event.limit,
+                "image_ids": event.image_ids,
+                "dataset_id": event.dataset_id,
+                "threshold": event.threshold,
+            },
+        )
 
-    sly.logger.info(
-        f"Searching for similar images in project {event.project_id}",
-        extra={
-            "prompt": event.prompt,
-            "by_image_ids": event.by_image_ids,
-            "limit": event.limit,
-            "image_ids": event.image_ids,
-            "dataset_id": event.dataset_id,
-            "threshold": event.threshold,
-        },
-    )
+        settings = {
+            EventFields.LIMIT: event.limit,
+            EventFields.BY_IMAGE_IDS: event.by_image_ids if event.by_image_ids else None,
+            EventFields.IMAGE_IDS: event.image_ids,
+            EventFields.DATASET_ID: event.dataset_id,
+            EventFields.THRESHOLD: event.threshold,
+        }
 
-    settings = {
-        EventFields.LIMIT: event.limit,
-        EventFields.BY_IMAGE_IDS: event.by_image_ids if event.by_image_ids else None,
-        EventFields.IMAGE_IDS: event.image_ids,
-        EventFields.DATASET_ID: event.dataset_id,
-        EventFields.THRESHOLD: event.threshold,
-    }
+        # ------------------------ Step 1: Get Cache For The Search If Available. ------------------------ #
+        prompt_str = (
+            ",".join(event.prompt) if isinstance(event.prompt, list) else str(event.prompt or "")
+        )
+        cache = SearchCache(api, event.project_id, prompt_str, settings)
 
-    # Try to get cached results first
-    prompt_str = (
-        ",".join(event.prompt) if isinstance(event.prompt, list) else str(event.prompt or "")
-    )
-    cache = SearchCache(api, event.project_id, prompt_str, settings)
+        if cache.collection_id is not None and cache.updated_at is not None:
+            if cache.project_info.is_embeddings_updated is False:
+                # If the project has outdated embeddings, invalidate the cache.
+                sly.logger.info(
+                    "Project %s has outdated embeddings. Invalidating cache.", event.project_id
+                )
+                await cache.clear()
+            else:
+                sly.logger.info("Using cached search results")
+                return JSONResponse({ResponseFields.COLLECTION_ID: cache.collection_id})
 
-    if cache.collection_id is not None and cache.updated_at is not None:
-        if cache.project_info.is_embeddings_updated is False:
-            # If the project has outdated embeddings, invalidate the cache.
-            sly.logger.info(
-                "Project %s has outdated embeddings. Invalidating cache.", event.project_id
+        # Collect project images info to use later for mapping.
+        image_infos = await image_get_list_async(api, event.project_id)
+        if image_infos is None or len(image_infos) == 0:
+            return JSONResponse({ResponseFields.MESSAGE: "Project is empty."})
+
+        # ------------------------- Step 2: Update Payloads In Qdrant If Needed. ------------------------- #
+        image_ids = prepare_ids(image_infos)
+        populate_response = await qdrant.populate_payloads(event.project_id, image_ids)
+        if isinstance(populate_response, List):
+            sly.logger.debug(
+                f"Project {event.project_id} does not have {len(populate_response)} images in Qdrant. Will update embeddings."
             )
-            await cache.clear()
-        else:
-            sly.logger.info("Using cached search results")
-            return {ResponseFields.COLLECTION_ID: cache.collection_id}
+            image_infos_to_update = [image_infos[i] for i in populate_response]
+            await process_images(api, event.project_id, image_infos=image_infos_to_update)
+        elif isinstance(populate_response, JSONResponse):
+            return populate_response
+        #! remove deleted items from payloads
+        # -------------------- Step 3: Prepare Text Prompts And Image URLs For Search -------------------- #
+        text_prompts = []
+        if event.prompt:
+            if isinstance(event.prompt, list):
+                text_prompts = event.prompt
+            else:
+                # If prompt is a comma-separated string, split it into a list.
+                text_prompts = event.prompt.split(",")
 
-    # Collect project images info to use later for mapping.
-    image_infos = await image_get_list_async(api, event.project_id)
-    if image_infos is None or len(image_infos) == 0:
-        return {ResponseFields.MESSAGE: "Project is empty."}
+        sly.logger.debug("Formatted text prompts: %s", text_prompts)
 
-    in_qdrant = await qdrant.is_project_in_qdrant(event.project_id)
-    if in_qdrant is None:
-        pass
-    elif not in_qdrant and cache.project_info.is_embeddings_updated:
-        # If the project has no points in Qdrant and embeddings are up to date, we need to update points payloads.
-        message = f"Project {event.project_id} has no relative points in Qdrant, but embeddings are up to date. Payloads will be updated."
-        sly.logger.info(message)
-        await process_images(api, event.project_id, image_infos=image_infos)  #! change method
+        image_urls = []
+        # If request contains image IDs, get image URLs to add to the query.
+        if event.by_image_ids:
+            filtered_image_infos = [info for info in image_infos if info.id in event.by_image_ids]
+            lite_image_infos = await get_lite_image_infos(
+                api,
+                cas_size=g.IMAGE_SIZE_FOR_CAS,
+                project_id=event.project_id,
+                image_infos=filtered_image_infos,
+            )
+            sly.logger.debug(
+                "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",
+                len(lite_image_infos),
+            )
+            image_urls = [image_info.cas_url for image_info in lite_image_infos]
+            #! check if we need to separate requests
 
-    text_prompts = []
-    if event.prompt:
-        if isinstance(event.prompt, list):
-            text_prompts = event.prompt
-        else:
-            # If prompt is a comma-separated string, split it into a list.
-            text_prompts = event.prompt.split(",")
+        # Combine text prompts and image URLs to create a query.
+        queries = text_prompts + image_urls
+        sly.logger.info("Final query: %s", queries)
 
-    sly.logger.debug("Formatted text prompts: %s", text_prompts)
+        if len(queries) == 0:
+            return JSONResponse({ResponseFields.MESSAGE: "No queries provided."})
 
-    image_urls = []
-    # If request contains image IDs, get image URLs to add to the query.
-    if event.by_image_ids:
-        filtered_image_infos = [info for info in image_infos if info.id in event.by_image_ids]
-        lite_image_infos = await get_lite_image_infos(
-            api,
-            cas_size=g.IMAGE_SIZE_FOR_CAS,
-            project_id=event.project_id,
-            image_infos=filtered_image_infos,
-        )
+        # ----------- Step 4: Vectorize The Query Data (can Be A Text Prompt Or An Image URL). ----------- #
+        query_vectors = await cas.get_vectors(queries)
         sly.logger.debug(
-            "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",
-            len(lite_image_infos),
-        )
-        image_urls = [image_info.cas_url for image_info in lite_image_infos]
-        #! check if we need to separate requests
-
-    # Combine text prompts and image URLs to create a query.
-    queries = text_prompts + image_urls
-    sly.logger.info("Final query: %s", queries)
-
-    if len(queries) == 0:
-        return {ResponseFields.MESSAGE: "No queries provided."}
-
-    # Vectorize the query data (can be a text prompt or an image URL).
-    query_vectors = await cas.get_vectors(queries)
-    sly.logger.debug(
-        "The query has been vectorized and will be used for search. Number of vectors: %d.",
-        len(query_vectors),
-    )
-
-    tasks = []
-
-    async def _search_task(collection: int, vector: np.ndarray, limit: int, query_filter, query):
-        return (
-            await qdrant.search(
-                collection_name=collection,
-                query_vector=vector,
-                limit=limit,
-                query_filter=query_filter,
-                score_threshold=event.threshold,
-            ),
-            query,
+            "The query has been vectorized and will be used for search. Number of vectors: %d.",
+            len(query_vectors),
         )
 
-    search_filter = None
+        # -------------------------- Step 5: Search For Similar Images In Qdrant ------------------------- #
+        tasks = []
 
-    if event.image_ids:
-        # If image_ids are provided, create a filter for the search.
-        search_filter = qdrant.get_search_filter(image_ids=event.image_ids)
-    elif event.dataset_id:
-        # If dataset_id is provided, create a filter for the search.
-        search_filter = qdrant.get_search_filter(dataset_id=event.dataset_id)
-    else:
-        # If project_id is provided, create a filter for the search.
-        search_filter = qdrant.get_search_filter(project_id=event.project_id)
+        async def _search_task(
+            collection: int, vector: np.ndarray, limit: int, query_filter, query
+        ):
+            return (
+                await qdrant.search(
+                    collection_name=collection,
+                    query_vector=vector,
+                    limit=limit,
+                    query_filter=query_filter,
+                    score_threshold=event.threshold,
+                ),
+                query,
+            )
 
-    for vector, query in zip(query_vectors, queries):
-        tasks.append(
-            asyncio.create_task(
-                _search_task(
-                    collection=qdrant.IMAGES_COLLECTION,
-                    vector=vector,
-                    limit=event.limit,
-                    query_filter=search_filter,
-                    query=query,
+        search_filter = None
+
+        if event.image_ids:
+            # If image_ids are provided, create a filter for the search.
+            search_filter = qdrant.get_search_filter(image_ids=event.image_ids)
+        elif event.dataset_id:
+            # If dataset_id is provided, create a filter for the search.
+            search_filter = qdrant.get_search_filter(dataset_id=event.dataset_id)
+        else:
+            # If project_id is provided, create a filter for the search.
+            search_filter = qdrant.get_search_filter(project_id=event.project_id)
+
+        for vector, query in zip(query_vectors, queries):
+            tasks.append(
+                asyncio.create_task(
+                    _search_task(
+                        collection=qdrant.IMAGES_COLLECTION,
+                        vector=vector,
+                        limit=event.limit,
+                        query_filter=search_filter,
+                        query=query,
+                    )
                 )
             )
-        )
 
-    results = []
-    for task in asyncio.as_completed(tasks):
-        search_results, query = await task
-        items = search_results[qdrant.SearchResultField.ITEMS]
-        if len(items) == 0:
-            sly.logger.debug("No similar images found for query %s", query)
-            continue
-        items = update_id_by_hash(image_infos, items)
-        # items = [info.to_json() for info in items]
-        if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
-            for i, score in enumerate(search_results[qdrant.SearchResultField.SCORES]):
-                items[i].score = score
-        else:
-            for i in range(len(items)):
-                items[i].score = None
-        results.extend(items)
-        sly.logger.debug("Found %d similar images for a query %s", len(items), query)
-    if len(results) == 0:
-        return {ResponseFields.MESSAGE: "No similar images found."}
-    # Cache the results before returning them
-    collection_id = await cache.save(results)
-    return {ResponseFields.COLLECTION_ID: collection_id}
+        results = []
+        for task in asyncio.as_completed(tasks):
+            search_results, query = await task
+            items = search_results[qdrant.SearchResultField.ITEMS]
+            if len(items) == 0:
+                sly.logger.debug("No similar images found for query %s", query)
+                continue
+            items = update_id_by_hash(image_infos, items)
+            # items = [info.to_json() for info in items]
+            if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
+                for i, score in enumerate(search_results[qdrant.SearchResultField.SCORES]):
+                    items[i].score = score
+            else:
+                for i in range(len(items)):
+                    items[i].score = None
+            results.extend(items)
+            sly.logger.debug("Found %d similar images for a query %s", len(items), query)
+        if len(results) == 0:
+            return JSONResponse({ResponseFields.MESSAGE: "No similar images found."})
+        # Cache the results before returning them
+        collection_id = await cache.save(results)
+        return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
+    except Exception as e:
+        sly.logger.error(f"Error during search: {str(e)}", exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: f"Search failed: {str(e)}"})
 
 
 @app.event(Event.Diverse, use_state=True)
@@ -413,19 +424,39 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         },
     )
 
+    # ------------------------------------ Step 1: Get Image Info ------------------------------------ #
     if event.image_ids:
         image_infos = await image_get_list_async(api, event.project_id, images_ids=event.image_ids)
     elif event.dataset_id:
         image_infos = await image_get_list_async(api, event.project_id, dataset_id=event.dataset_id)
     else:
         image_infos = await image_get_list_async(api, event.project_id)
-    # image_hashes = [info.hash for info in image_infos]
+        # image_hashes = [info.hash for info in image_infos]
+
+    # ------------------------- Step 2: Update Payloads In Qdrant If Needed. ------------------------- #
+    image_ids = prepare_ids(image_infos)
+    populate_response = await qdrant.populate_payloads(event.project_id, image_ids)
+    if isinstance(populate_response, List):
+        sly.logger.debug(
+            f"Project {event.project_id} does not have {len(populate_response)} images in Qdrant. Will update embeddings."
+        )
+        image_infos_to_update = [image_infos[i] for i in populate_response]
+        await process_images(api, event.project_id, image_infos=image_infos_to_update)
+    elif isinstance(populate_response, JSONResponse):
+        return populate_response
+    #! remove deleted items from payloads
+
+    # ----------------------------- Step 3: Get Image Vectors From Qdrant ---------------------------- #
     image_infos_result, vectors = await qdrant.get_items_by_info(
         qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
     )
 
+    if len(vectors) == 0:
+        return JSONResponse({ResponseFields.MESSAGE: "No vectors found."})
+
     image_infos_result = update_id_by_hash(image_infos, image_infos_result)
 
+    # ------------------------- Step 4: Prepare Data For Projections Service ------------------------- #
     data = {
         "vectors": vectors,
         "sample_size": event.sample_size,
@@ -439,6 +470,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     elif event.clustering_method == ClusteringMethods.DBSCAN:
         data["settings"] = {"clustering_method": event.clustering_method}
 
+    # --------------- Step 5: Send Request To Projections Service And Return The Result -------------- #
     samples = await send_request(
         api, task_id=g.projections_service_task_id, method="diverse", data=data
     )
@@ -450,7 +482,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     sly.logger.debug("Generated %d diverse images.", len(result))
 
     if len(result) == 0:
-        return {ResponseFields.MESSAGE: "No diverse images found."}
+        return JSONResponse({ResponseFields.MESSAGE: "No diverse images found."})
 
     # Delete existing collection items if any and create a new collection for the diverse population.
     collection_id = await create_collection_and_populate(
@@ -460,12 +492,14 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         event=EventFields.DIVERSE,
         image_ids=result,
     )
-    return {ResponseFields.COLLECTION_ID: collection_id}
+    return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
 
 
 @app.event(Event.Projections, use_state=True)
 @timeit
 async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
+    # TODO: Remove this response and implement projections.
+    return JSONResponse({ResponseFields.MESSAGE: "Projections are not supported yet."})
     project_info = await get_project_info(api, event.project_id)
     pcd_info = None
     try:

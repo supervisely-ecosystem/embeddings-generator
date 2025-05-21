@@ -3,6 +3,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 import supervisely as sly
+from fastapi.responses import JSONResponse
 from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.conversions import common_types as types
 from qdrant_client.http import models
@@ -21,6 +22,7 @@ import src.globals as g
 from src.utils import (
     ImageInfoLite,
     QdrantFields,
+    ResponseFields,
     TupleFields,
     parse_timestamp,
     prepare_ids,
@@ -336,7 +338,7 @@ async def upsert(
     """
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
-    payloads = prepare_payloads(image_infos, reference_ids)
+    payloads = create_payloads(image_infos, reference_ids)
     ids = await prepare_ids(image_infos)
     sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
     sly.logger.debug("Upserting %d payloads to collection %s.", len(payloads), collection_name)
@@ -469,7 +471,7 @@ def _diff(
 
 
 @timeit
-def prepare_payloads(
+def create_payloads(
     image_infos: List[ImageInfoLite], references: List[Optional[ImageReferences]]
 ) -> List[Dict[str, Any]]:
     """
@@ -623,6 +625,7 @@ async def get_item_payloads(collection_name: str, ids=List[str]) -> Dict[str, An
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
 
+    #! check if need to batch request
     points = await client.retrieve(
         collection_name,
         ids,
@@ -642,13 +645,17 @@ async def get_item_payloads(collection_name: str, ids=List[str]) -> Dict[str, An
 
 
 @with_retries()
-async def update_payloads(collection_name: str, id_to_payload: Dict[str, Dict]) -> None:
+async def update_payloads(
+    collection_name: str, id_to_payload: Dict[str, Dict], wait: bool = False
+) -> None:
     """Update payloads of items in the collection based on the specified IDs.
 
     :param collection_name: The name of the collection to update items in.
     :type collection_name: str
     :param id_to_payload: A dictionary with ID keys and payload values.
     :type id_to_payload: Dict[str, Dict]
+    :param wait: Whether to wait for the operation to complete, defaults to False.
+    :type wait: bool, optional
     """
     if len(id_to_payload) == 0:
         return
@@ -666,7 +673,7 @@ async def update_payloads(collection_name: str, id_to_payload: Dict[str, Dict]) 
             )
             for point_id, payload in id_to_payload.items()
         ],
-        wait=False,
+        wait=wait,
     )
 
 
@@ -699,23 +706,47 @@ async def get_single_point(
 
 
 @timeit
-async def is_project_in_qdrant(project_id: int) -> bool:
-    """Check if any point of Qdrant collection has the specified project ID in its payload.
+async def populate_payloads(project_id: int, point_ids: List[str]) -> bool:
+    """
+    Extend the payloads of items in the collection with the specified project ID.
 
-    :param project_id: The ID of the project to check.
+    :param project_id: The ID of the project for which to extend the payloads.
     :type project_id: int
+    :param point_ids: The IDs of the items to extend.
+    :type point_ids: List[str]
     :return: True if the project is in Qdrant, False otherwise.
     :rtype: bool
     """
-    filter = get_search_filter(project_id=project_id)
+    exclude_ids = []
     try:
-        points, _ = await client.scroll(
-            collection_name=IMAGES_COLLECTION,
-            limit=1,
-            scroll_filter=filter,
-            with_payload=True,
-            with_vectors=False,
+        id_to_payload_map = await get_item_payloads(IMAGES_COLLECTION, point_ids)
+        if len(id_to_payload_map) == len(point_ids):
+            for id, payload in id_to_payload_map.items():
+                if project_id in payload.get(QdrantFields.PROJECT_IDS, []):
+                    exclude_ids.append(id)
+                else:
+                    payload.get(QdrantFields.PROJECT_IDS, []).append(project_id)
+                    id_to_payload_map[id] = payload
+            if len(exclude_ids) > 0:
+                id_to_payload_map = {
+                    id: payload
+                    for id, payload in id_to_payload_map.items()
+                    if id not in exclude_ids
+                }
+            if len(id_to_payload_map) > 0:
+                await update_payloads(IMAGES_COLLECTION, id_to_payload_map, wait=True)
+            return None
+        else:
+            # Find ids that are not in Qdrant. Embeddings for this images must be calculated.
+            missing_indices = []
+            for i, point_id in enumerate(point_ids):
+                if id_to_payload_map.get(point_id) is None:
+                    missing_indices.append(i)
+            sly.logger.debug(
+                f"Found {len(missing_indices)} images not in Qdrant out of {len(point_ids)}"
+            )
+            return missing_indices
+    except Exception as e:
+        return JSONResponse(
+            {ResponseFields.MESSAGE: "Failed to populate payloads. " + str(e)}, status_code=500
         )
-        return len(points) > 0
-    except UnexpectedResponse:
-        return None
