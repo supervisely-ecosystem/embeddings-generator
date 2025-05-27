@@ -121,14 +121,14 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 api, event.project_id, image_infos=image_infos, payloads=current_payloads
             )
             if len(image_infos) > 0:
-                # Step 4: Update embeddings timestamp for images and delete all AI collections in the project as they are outdated.
+                # Step 4: Delete all AI collections in the project as they are outdated.
 
                 await SearchCache.drop_cache(api, event.project_id)
 
             sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
 
             if event.return_vectors:
-                _, vectors = await qdrant.get_items_by_info(
+                _, vectors = await qdrant.get_items_by_id(
                     qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
                 )
                 # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
@@ -196,18 +196,19 @@ async def update_embeddings_payload(api: sly.Api, event: Event.Embeddings) -> No
         sly.logger.info(message)
         return JSONResponse({ResponseFields.MESSAGE: message})
 
-    in_qdrant = await qdrant.populate_payloads(event.project_id)
+    image_infos = await image_get_list_async(api, event.project_id)
+    populate_response = await qdrant.populate_payloads(event.project_id, image_infos)
 
-    if in_qdrant is None:
-        message = f"It is not possible to detect if project {event.project_id} has items in Qdrant. Will be skipped."
-        sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message})
+    # if in_qdrant is None:
+    #     message = f"It is not possible to detect if project {event.project_id} has items in Qdrant. Will be skipped."
+    #     sly.logger.info(message)
+    #     return JSONResponse({ResponseFields.MESSAGE: message})
 
     # Step 1: Check if any point in qdrant belongs to this project.
-    if project_info.is_embeddings_updated and not in_qdrant:
-        message = (
-            f"Project {event.project_id} has no relative points in Qdrant. Payload will be updated."
-        )
+    # if project_info.is_embeddings_updated and not in_qdrant:
+    #     message = (
+    #         f"Project {event.project_id} has no relative points in Qdrant. Payload will be updated."
+    #     )
 
     # Step 2: Update payloads for images.
     image_infos = await image_get_list_async(api, event.project_id)
@@ -274,14 +275,14 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             return JSONResponse({ResponseFields.MESSAGE: "Project is empty."})
 
         # ------------------------- Step 2: Update Payloads In Qdrant If Needed. ------------------------- #
-        image_ids = prepare_ids(image_infos)
-        populate_response = await qdrant.populate_payloads(event.project_id, image_ids)
+        populate_response = await qdrant.populate_payloads(event.project_id, image_infos)
         if isinstance(populate_response, List):
             sly.logger.debug(
                 f"Project {event.project_id} does not have {len(populate_response)} images in Qdrant. Will update embeddings."
             )
             image_infos_to_update = [image_infos[i] for i in populate_response]
-            await process_images(api, event.project_id, image_infos=image_infos_to_update)
+            if len(image_infos_to_update) > 0:
+                await process_images(api, event.project_id, image_infos=image_infos_to_update)
         elif isinstance(populate_response, JSONResponse):
             return populate_response
         #! remove deleted items from payloads
@@ -434,8 +435,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         # image_hashes = [info.hash for info in image_infos]
 
     # ------------------------- Step 2: Update Payloads In Qdrant If Needed. ------------------------- #
-    image_ids = prepare_ids(image_infos)
-    populate_response = await qdrant.populate_payloads(event.project_id, image_ids)
+    populate_response = await qdrant.populate_payloads(event.project_id, image_infos)
     if isinstance(populate_response, List):
         sly.logger.debug(
             f"Project {event.project_id} does not have {len(populate_response)} images in Qdrant. Will update embeddings."
@@ -447,7 +447,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     #! remove deleted items from payloads
 
     # ----------------------------- Step 3: Get Image Vectors From Qdrant ---------------------------- #
-    image_infos_result, vectors = await qdrant.get_items_by_info(
+    image_infos_result, vectors = await qdrant.get_items_by_id(
         qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
     )
 
@@ -562,7 +562,7 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
     else:
         image_infos = await image_get_list_async(api, event.project_id)
     # image_hashes = [info.hash for info in image_infos]
-    image_infos_result, vectors = await qdrant.get_items_by_info(
+    image_infos_result, vectors = await qdrant.get_items_by_id(
         qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
     )
     image_infos_result = update_id_by_hash(image_infos, image_infos_result)

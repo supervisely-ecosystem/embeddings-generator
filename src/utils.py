@@ -11,7 +11,8 @@ from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
 
@@ -48,9 +49,9 @@ class QdrantFields:
 
     # Payload Fields
     REFERENCE_IDS = "reference_ids"
-    PROJECT_IDS = "project_ids"
-    DATASET_IDS = "dataset_ids"
-    IMAGE_IDS = "image_ids"
+    PROJECT_ID = "project_ids"
+    DATASET_ID = "dataset_ids"
+    IMAGE_ID = "image_ids"
 
 
 class EventFields:
@@ -128,9 +129,6 @@ class ResponseStatus:
 class ImageInfoLite:
     id: int
     dataset_id: int
-    project_id: int
-    hash: str
-    link: str
     full_url: str
     cas_url: str
     updated_at: str  # or datetime.datetime if you parse it
@@ -140,9 +138,6 @@ class ImageInfoLite:
         return {
             TupleFields.ID: self.id,
             TupleFields.DATASET_ID: self.dataset_id,
-            TupleFields.PROJECT_ID: self.project_id,
-            TupleFields.HASH: self.hash,
-            TupleFields.LINK: self.link,
             TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.UPDATED_AT: self.updated_at,
@@ -151,13 +146,10 @@ class ImageInfoLite:
         # Alternative: return asdict(self)  # if field names match keys
 
     @classmethod
-    def from_json(cls, data):
+    def from_json(cls, data: dict):
         return cls(
             id=data[TupleFields.ID],
             dataset_id=data[TupleFields.DATASET_ID],
-            project_id=data[TupleFields.PROJECT_ID],
-            hash=data[TupleFields.HASH],
-            link=data[TupleFields.LINK],
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             updated_at=data[TupleFields.UPDATED_AT],

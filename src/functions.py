@@ -235,10 +235,9 @@ async def auto_update_all_embeddings():
     # project_ids = [int(name) for name in collection_names]
     project_infos: List[sly.ProjectInfo] = await get_all_projects(g.api)
     for project_info in project_infos:
-        if project_info.is_embeddings_updated is False:
-            await auto_update_embeddings(
-                g.api,
-                project_info.id,
-                project_info=project_info,
-            )
+        await auto_update_embeddings(
+            g.api,
+            project_info.id,
+            project_info=project_info,
+        )
     logger.info("Auto update all embeddings task finished.")

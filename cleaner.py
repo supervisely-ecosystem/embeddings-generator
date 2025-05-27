@@ -10,7 +10,7 @@ from supervisely.api.entities_collection_api import CollectionType, CollectionTy
 from supervisely.api.module_api import ApiField
 from tqdm import tqdm
 
-from src.utils import batched, get_list_all_pages_async, to_thread
+from src.utils import batched, get_list_all_pages_async, set_embeddings_in_progress, to_thread, image_get_list_async
 
 api = sly.Api.from_env()
 
@@ -107,6 +107,9 @@ def process_eua_for_project(
     progress: tqdm,
 ):
     datasets = api.dataset.get_list(project_id=project_info.id)
+    if len(datasets) == 0:
+        progress.update(1)
+        return
     dataset_id = None
     for dataset in datasets:
         if dataset.images_count != 0 or dataset.items_count != 0:
@@ -189,6 +192,7 @@ def main():
     tasks = []
     for project_info in project_infos:
         tasks.append(process_eua_for_project(project_info, progress_updated_at))
+        tasks.append(set_embeddings_in_progress(api, project_info.id, False))
     if len(tasks) > 0:
         sly.run_coroutine(asyncio.gather(*tasks))
 

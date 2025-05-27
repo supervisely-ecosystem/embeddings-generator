@@ -65,7 +65,8 @@ except Exception as e:
     sly.logger.error(f"Failed to connect to Qdrant at {g.qdrant_host}: {e}")
 
 
-IMAGES_COLLECTION = "images"
+# IMAGES_COLLECTION = "images"
+IMAGES_COLLECTION = "images-test"
 
 
 class SearchResultField:
@@ -150,7 +151,7 @@ def get_search_filter(
         filter = models.Filter(
             must=[
                 models.FieldCondition(
-                    key=QdrantFields.IMAGE_IDS,
+                    key=QdrantFields.IMAGE_ID,
                     match=models.MatchAny(any=image_ids),
                 ),
             ],
@@ -159,7 +160,7 @@ def get_search_filter(
         filter = models.Filter(
             must=[
                 models.FieldCondition(
-                    key=QdrantFields.DATASET_IDS,
+                    key=QdrantFields.DATASET_ID,
                     match=models.MatchAny(any=[dataset_id]),
                 ),
             ],
@@ -168,7 +169,7 @@ def get_search_filter(
         filter = models.Filter(
             must=[
                 models.FieldCondition(
-                    key=QdrantFields.PROJECT_IDS,
+                    key=QdrantFields.PROJECT_ID,
                     match=models.MatchAny(any=[project_id]),
                 ),
             ],
@@ -233,23 +234,18 @@ async def get_or_create_collection(
         sly.logger.debug("Collection %s created.", collection_name)
 
         # Create necessary indexes for efficient filtering
-        await client.create_payload_index(
-            collection_name=collection_name,
-            field_name=f"{QdrantFields.PROJECT_IDS}",
-            field_schema="keyword",
-        )
 
         await client.create_payload_index(
             collection_name=collection_name,
-            field_name=f"{QdrantFields.DATASET_IDS}",
+            field_name=f"{QdrantFields.DATASET_ID}",
             field_schema="keyword",
         )
 
-        await client.create_payload_index(
-            collection_name=collection_name,
-            field_name=f"{QdrantFields.IMAGE_IDS}",
-            field_schema="keyword",
-        )
+        # await client.create_payload_index(
+        #     collection_name=collection_name,
+        #     field_name=f"{QdrantFields.IMAGE_ID}",
+        #     field_schema="keyword",
+        # )
 
         sly.logger.debug("Created payload indexes for collection %s", collection_name)
 
@@ -276,18 +272,17 @@ async def collection_exists(collection_name: str) -> bool:
 
 @with_retries()
 @timeit
-async def get_items_by_info(
+async def get_items_by_id(
     collection_name: str,
-    image_infos: List[Union[sly.ImageInfo, ImageInfoLite]],
+    image_ids: List[int],
     with_vectors: bool = False,
 ) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
-    """Get vectors from the collection based on the specified image hashes.
+    """Get vectors from the collection based on the image IDs.
 
     :param collection_name: The name of the collection to get vectors from.
     :type collection_name: str
-    :param image_infos: A list of ImageInfo or ImageInfoLite objects.
-                        If ImageInfoLite, the hash or link field must be set.
-    :type image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]
+    :param image_ids: A list image IDs to retrieve from the collection.
+    :type image_ids: List[int]
     :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type with_vectors: bool, optional
     :return: A list of vectors.
@@ -296,22 +291,14 @@ async def get_items_by_info(
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
 
-    point_ids = await prepare_ids(image_infos)
-
     points = await client.retrieve(
         collection_name=collection_name,
-        ids=point_ids,
+        ids=image_ids,
         with_payload=True,
         with_vectors=with_vectors,
     )
 
-    for point in points:
-        point.payload = ImageReferences.clear_payload(point.payload)
-
-    image_infos = [
-        ImageInfoLite(id=None, dataset_id=None, project_id=None, **point.payload)
-        for point in points
-    ]
+    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
 
     if with_vectors:
         vectors = [point.vector for point in points]
@@ -325,7 +312,6 @@ async def upsert(
     collection_name: str,
     vectors: List[np.ndarray],
     image_infos: List[ImageInfoLite],
-    reference_ids: List[Optional[Dict[str, int]]],
 ) -> None:
     """Upsert vectors and payloads to the collection.
 
@@ -338,10 +324,9 @@ async def upsert(
     """
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
-    payloads = create_payloads(image_infos, reference_ids)
-    ids = await prepare_ids(image_infos)
+    ids = [image_info.id for image_info in image_infos]
+    payloads = create_payloads(image_infos)
     sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
-    sly.logger.debug("Upserting %d payloads to collection %s.", len(payloads), collection_name)
     await client.upsert(collection_name, Batch(vectors=vectors, ids=ids, payloads=payloads))
 
     if sly.is_development():
@@ -356,37 +341,27 @@ async def upsert(
 
 @with_retries()
 @timeit
-async def get_diff(
-    collection_name: str,
-    image_infos: List[ImageInfoLite],
-    payloads: Optional[Dict[str, Dict]] = None,
-    ids: Optional[List[str]] = None,
-) -> Dict[str, Dict[str, Any]]:
+async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> List[ImageInfoLite]:
     """Get the difference between ImageInfoLite objects and points from the collection.
-    Returns a dictionary with IDs as keys and dictionaries with ImageInfoLite objects and ImageReferences objects as values.
+    Returns ImageInfoLite objects that need to be updated.
 
     :param collection_name: The name of the collection to get items from.
     :type collection_name: str
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
-    :param payloads: A dictionary with payloads to update the points in the collection.
-    :type payloads: Optional[Dict[str, Dict]], optional
-    :param ids: A list of IDs to get from the collection.
-    :type ids: Optional[List[str]], optional
-    :return: A dictionary with IDs as keys and dictionaries with ImageInfoLite objects and ImageReferences objects as values.
-    :rtype: Dict[str, Dict[str, Any]]
+    :return: A list of ImageInfoLite objects that need to be updated.
+    :rtype: List[ImageInfoLite]
     """
     # Get specified ids from collection, compare updated_at and return ids that need to be updated.
     if isinstance(collection_name, int):
         collection_name = str(collection_name)
 
-    if ids is None:
-        ids = await prepare_ids(image_infos)
+    ids = [image_info.id for image_info in image_infos]
 
-    points = await client.retrieve(collection_name, ids, with_payload=True)
+    points = await client.retrieve(collection_name=collection_name, ids=ids, with_payload=True)
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
 
-    diff = _diff(ids, image_infos, points, payloads)
+    diff = _diff(image_infos, points)
 
     sly.logger.debug("Found %d points that need to be updated.", len(diff))
     if sly.is_development():
@@ -405,115 +380,51 @@ async def get_diff(
 
 @timeit
 def _diff(
-    ids: List[str],
     image_infos: List[ImageInfoLite],
     points: List[Dict[str, Any]],
-    payloads: Optional[Dict[str, Dict]] = None,
-) -> Tuple[List[ImageInfoLite], List[ImageReferences]]:
+) -> List[ImageInfoLite]:
     """Get the difference between ImageInfoLite objects and points from the collection.
-    Uses payloads to check if need to update the points or only their payload in the collection.
-    Returns dict with IDs as keys and dicts with ImageInfoLite objects and ImageReferences objects as values.
 
-    :param ids: A list of IDs to get from the collection.
-    :type ids: Optional[List[str]], optional
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     :param points: A list of dictionaries with points from the collection.
     :type points: List[Dict[str, Any]]
-    :param payloads: A dictionary with payloads to update the points in the collection.
-    :type payloads: Optional[Dict[str, Dict]], optional
-
-    :return: Dictionary with IDs as keys and dicts with ImageInfoLite objects and ImageReferences objects as values.
-    :rtype: Dict[str, Dict[str, Any]]
+    :return: List of ImageInfoLite objects that need to be updated.
+    :rtype: List[ImageInfoLite]
     """
-    if len(image_infos) != len(ids):
-        raise ValueError(
-            "Length of image_infos and ids must be the same. "
-            f"Got {len(image_infos)} and {len(ids)}."
-        )
+
     # If the point with the same id doesn't exist in the collection, it will be added to the diff.
     # If the point with the same id exsts - check if IDs are in the payload, if not - add them to the diff.
-    diff = {point_id: {} for point_id in ids}
-    points_dict = {}
-    for point in points:
-        if point.payload.get(TupleFields.HASH) is not None:
-            points_dict[point.payload.get(TupleFields.HASH)] = point
-        elif point.payload.get(TupleFields.LINK) is not None:
-            points_dict[point.payload.get(TupleFields.LINK)] = point
+    # Image infos and points have different length, so we need to iterate over image infos.
+    diff = []
+    points_dict = {point.id: point for point in points}
 
-    for point_id, image_info in zip(ids, image_infos):
-        if image_info.hash is not None:
-            point = points_dict.get(image_info.hash)
-        elif image_info.link is not None:
-            point = points_dict.get(image_info.link)
-        if point is None:
-            diff[point_id]["info"] = image_info
-            diff[point_id]["payload"] = None
-            continue
-        payload = payloads.get(point_id) if payloads else None
-        if payload is None:
-            continue
-        update_payload = False
-        if image_info.id not in point.payload.get(QdrantFields.IMAGE_IDS, []):
-            point.payload[QdrantFields.IMAGE_IDS].append(image_info.id)
-            update_payload = True
-        if image_info.dataset_id not in point.payload.get(QdrantFields.DATASET_IDS, []):
-            point.payload[QdrantFields.DATASET_IDS].append(image_info.dataset_id)
-            update_payload = True
-        if image_info.project_id not in point.payload.get(QdrantFields.PROJECT_IDS, []):
-            point.payload[QdrantFields.PROJECT_IDS].append(image_info.project_id)
-            update_payload = True
-        if update_payload:
-            diff[point_id]["info"] = None
-            diff[point_id]["payload"] = point.payload
-    diff = {k: v for k, v in diff.items() if v}
+    for image_info in image_infos:
+        point = points_dict.get(image_info.id)
+        if point is None or point.payload.get(TupleFields.UPDATED_AT) != image_info.updated_at:
+            diff.append(image_info)
+
     return diff
 
 
 @timeit
-def create_payloads(
-    image_infos: List[ImageInfoLite], references: List[Optional[ImageReferences]]
-) -> List[Dict[str, Any]]:
+def create_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
     """
     Prepare payloads for ImageInfoLite objects before upserting to Qdrant.
     Converts named tuples to dictionaries and removes fields:
        - ID
-       - PROJECT_ID
-       - DATASET_ID
        - SCORE
 
-    Adds reference IDs to the payloads.
-
     :param image_infos: A list of ImageInfoLite objects.
-    :type image_infos: List[ImageInfoLite]
-    :param reference_ids: A dictionary with reference IDs.
-    :type reference_ids: List[Optional[Dict[str, int]]]
+    :type image_infos: List[ImageInfoLite]    :
     :return: A list of payloads.
     :rtype: List[Dict[str, Any]]
     """
-    ignore_fields = [
-        TupleFields.ID,
-        TupleFields.PROJECT_ID,
-        TupleFields.DATASET_ID,
-        TupleFields.SCORE,
+    ignore_fields = [TupleFields.ID, TupleFields.SCORE]
+    payloads = [
+        {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
+        for image_info in image_infos
     ]
-    payloads = []
-    for image_info, reference in zip(image_infos, references):
-        payload = {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
-        if reference is not None:
-            reference.update(
-                image_ids=[image_info.id],
-                project_ids=[image_info.project_id],
-                dataset_ids=[image_info.dataset_id],
-            )
-            payload[QdrantFields.IMAGE_IDS] = reference.image_ids
-            payload[QdrantFields.PROJECT_IDS] = reference.project_ids
-            payload[QdrantFields.DATASET_IDS] = reference.dataset_ids
-        else:
-            payload[QdrantFields.IMAGE_IDS] = [image_info.id]
-            payload[QdrantFields.PROJECT_IDS] = [image_info.project_id]
-            payload[QdrantFields.DATASET_IDS] = [image_info.dataset_id]
-        payloads.append(payload)
     return payloads
 
 
@@ -554,8 +465,8 @@ async def search(
         collection_name = str(collection_name)
 
     response = await client.query_points(
-        collection_name,
-        query_vector,
+        collection_name=collection_name,
+        query=query_vector,
         query_filter=query_filter,
         limit=limit,
         with_payload=True,
@@ -563,11 +474,11 @@ async def search(
         score_threshold=score_threshold,
     )
     result = {}
-    items = []
-    for point in response.points:
-        payload = ImageReferences.clear_payload(point.payload)
-        items.append(ImageInfoLite(id=None, dataset_id=None, project_id=None, **payload))
-    result[SearchResultField.ITEMS] = items
+
+    result[SearchResultField.ITEMS] = [
+        ImageInfoLite(id=point.id, **point.payload) for point in response.points
+    ]
+
     if return_vectors:
         result[SearchResultField.VECTORS] = [point.vector for point in response.points]
 
@@ -597,16 +508,15 @@ async def get_items(
         collection = await client.get_collection(collection_name)
         limit = collection.points_count
     points, _ = await client.scroll(
-        collection_name,
+        collection_name=collection_name,
         limit=limit,
         with_payload=True,
         with_vectors=True,
     )
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
-    return [
-        ImageInfoLite(id=None, project_id=None, dataset_id=None, **point.payload)
-        for point in points
-    ], [point.vector for point in points]
+    return [ImageInfoLite(id=point.id, **point.payload) for point in points], [
+        point.vector for point in points
+    ]
 
 
 @with_retries()
@@ -675,78 +585,3 @@ async def update_payloads(
         ],
         wait=wait,
     )
-
-
-@timeit
-async def get_single_point(
-    collection_name: str,
-    vector: np.ndarray,
-    limit: int,
-    option: Literal["farthest", "closest", "random"] = "farthest",
-) -> Tuple[ImageInfoLite, np.ndarray]:
-    """Get a single point from the collection based on the specified option.
-    Options available: "farthest", "closest", "random".
-    NOTE: This function is too slow, need to find an option to get farthest point from Qdrant.
-
-    :param collection_name: The name of the collection to get items from.
-    :type collection_name: str
-    :param vector: The vector to use for searching.
-    :type vector: np.ndarray
-    :param limit: The number of items to search.
-    :type limit: int
-    :param option: The option to use for choosing the point, defaults to "farthest".
-    :type option: Literal["farthest", "closest", "random"], optional
-    :return: The ImageInfoLite object and the vector of the chosen point.
-    :rtype: Tuple[ImageInfoLite, np.ndarray]
-    """
-    raise NotImplementedError(
-        "This function is too slow, need to find an option to get farthest point from Qdrant."
-    )
-    # image_infos, vectors = await search(collection_name, vector, limit, return_vectors=True)
-
-
-@timeit
-async def populate_payloads(project_id: int, point_ids: List[str]) -> bool:
-    """
-    Extend the payloads of items in the collection with the specified project ID.
-
-    :param project_id: The ID of the project for which to extend the payloads.
-    :type project_id: int
-    :param point_ids: The IDs of the items to extend.
-    :type point_ids: List[str]
-    :return: True if the project is in Qdrant, False otherwise.
-    :rtype: bool
-    """
-    exclude_ids = []
-    try:
-        id_to_payload_map = await get_item_payloads(IMAGES_COLLECTION, point_ids)
-        if len(id_to_payload_map) == len(point_ids):
-            for id, payload in id_to_payload_map.items():
-                if project_id in payload.get(QdrantFields.PROJECT_IDS, []):
-                    exclude_ids.append(id)
-                else:
-                    payload.get(QdrantFields.PROJECT_IDS, []).append(project_id)
-                    id_to_payload_map[id] = payload
-            if len(exclude_ids) > 0:
-                id_to_payload_map = {
-                    id: payload
-                    for id, payload in id_to_payload_map.items()
-                    if id not in exclude_ids
-                }
-            if len(id_to_payload_map) > 0:
-                await update_payloads(IMAGES_COLLECTION, id_to_payload_map, wait=True)
-            return None
-        else:
-            # Find ids that are not in Qdrant. Embeddings for this images must be calculated.
-            missing_indices = []
-            for i, point_id in enumerate(point_ids):
-                if id_to_payload_map.get(point_id) is None:
-                    missing_indices.append(i)
-            sly.logger.debug(
-                f"Found {len(missing_indices)} images not in Qdrant out of {len(point_ids)}"
-            )
-            return missing_indices
-    except Exception as e:
-        return JSONResponse(
-            {ResponseFields.MESSAGE: "Failed to populate payloads. " + str(e)}, status_code=500
-        )

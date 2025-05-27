@@ -57,7 +57,7 @@ async def create_projections(
         )
     # image_hashes = [info.hash for info in image_infos]
 
-    image_infos_result, vectors = await qdrant.get_items_by_info(
+    image_infos_result, vectors = await qdrant.get_items_by_id(
         qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
     )
     image_infos_result = update_id_by_hash(image_infos, image_infos_result)
