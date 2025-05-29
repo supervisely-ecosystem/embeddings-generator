@@ -18,6 +18,7 @@ from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
 from src.search_cache import CollectionItem, SearchCache
 from src.utils import (
+    ApiField,
     ClusteringMethods,
     EventFields,
     ImageInfoLite,
@@ -30,11 +31,11 @@ from src.utils import (
     get_project_info,
     image_get_list_async,
     parse_timestamp,
-    prepare_ids,
     run_safe,
     send_request,
     set_embeddings_in_progress,
     set_embeddings_updated_at,
+    set_project_embeddings_updated_at,
     timeit,
     update_id_by_hash,
 )
@@ -57,9 +58,6 @@ if sly.is_development():
     sly.app.development.enable_advanced_debug()
 
 
-asyncio.gather(qdrant.get_or_create_collection(qdrant.IMAGES_COLLECTION))
-
-
 @app.event(Event.Embeddings, use_state=True)
 @timeit
 async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
@@ -79,67 +77,82 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             "image_ids": event.image_ids,
         },
     )
+
+    collection_msg = f"[Collection: {event.project_id}] "
+
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+    last_update = project_info.custom_data.get(ApiField.EMBEDDINGS_UPDATED_AT, None)
 
-    # Step 0: Check if embeddings are already up to date.
-    if not event.force and project_info.is_embeddings_updated:
-        message = f"Embeddings are up to date for project {event.project_id}. Skipping."
-        sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message})
-
-    # Step 1: Check if embeddings are already in progress.
+    # Step 0: Check if embeddings are already in progress.
     if project_info.embeddings_in_progress:
-        message = (
-            f"Embeddings creation is already in progress for project {event.project_id}. Skipping."
-        )
+        message = f"{collection_msg} Embeddings creation is already in progress. Skipping."
         sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message})
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=409)
+
+    # Step 1: Check if embeddings are already up to date.
+    if event.force:
+        images_to_create = await image_get_list_async(api, event.project_id)
+        images_to_delete = []
+    elif event.image_ids:
+        images_to_create = await image_get_list_async(
+            api, event.project_id, images_ids=event.image_ids, created_after_filter=last_update
+        )
+        if last_update is not None:
+            images_to_delete = await image_get_list_async(
+                api, event.project_id, images_ids=event.image_ids, deleted_after_filter=last_update
+            )
+        else:
+            images_to_delete = []
+    else:
+        images_to_create = await image_get_list_async(
+            api, event.project_id, created_after_filter=last_update
+        )
+        if last_update is not None:
+            images_to_delete = await image_get_list_async(
+                api, event.project_id, deleted_after_filter=last_update
+            )
+        else:
+            images_to_delete = []
+
+    if len(images_to_create) == 0 and len(images_to_delete) == 0:
+        message = f"{collection_msg} Embeddings are up to date. Skipping."
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=409)
 
     async def execute():
         try:
             await set_embeddings_in_progress(api, event.project_id, True)
 
-            if event.image_ids:
-                image_infos = await image_get_list_async(
-                    api, event.project_id, images_ids=event.image_ids
-                )
-            else:
-                image_infos = await image_get_list_async(api, event.project_id)
+            # Step 2: If force is True, delete the collection and recreate it.
+            if event.force and not project_info.embeddings_in_progress:
+                sly.logger.debug(f"{collection_msg} Force enabled, deleting collection.")
+                await qdrant.delete_collection(event.project_id)
 
-            # Step 2: If force is True, delete existing collection items and save their payloads.
-            current_payloads = None
-            if event.force:
-                sly.logger.debug(
-                    "Force enabled for project %s, will recreate items in collection %s.",
-                    event.project_id,
-                    qdrant.IMAGES_COLLECTION,
-                )
-                current_payloads = await qdrant.delete_collection_items(image_infos)
+            await qdrant.get_or_create_collection(event.project_id)
 
             # Step 3: Process images.
-            image_infos = await process_images(
-                api, event.project_id, image_infos=image_infos, payloads=current_payloads
+            image_infos, vectors = await process_images(
+                api,
+                event.project_id,
+                to_create=images_to_create,
+                to_delete=images_to_delete,
+                return_vectors=event.return_vectors,
+                check_collection_exists=False,
             )
-            if len(image_infos) > 0:
-                # Step 4: Delete all AI collections in the project as they are outdated.
 
-                await SearchCache.drop_cache(api, event.project_id)
+            # if len(image_infos) > 0:
+            #     # Step 4: Delete all AI Search Entities Collections in the project as they are outdated.
 
-            sly.logger.debug("Embeddings for project %s have been created.", event.project_id)
-
+            #     await SearchCache.drop_cache(api, event.project_id)
+            await set_project_embeddings_updated_at(api, event.project_id)
             if event.return_vectors:
-                _, vectors = await qdrant.get_items_by_id(
-                    qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
-                )
-                # image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+                # _, vectors = await qdrant.get_items_by_id(
+                #     qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
+                # )
 
-                sly.logger.debug(
-                    "Got %d image infos and %d vectors.", len(image_infos), len(vectors)
-                )
                 sly.logger.info(
-                    "Embeddings creation for project %s has been completed. %d images processed.",
-                    event.project_id,
-                    len(image_infos),
+                    f"{collection_msg} Embeddings creation has been completed. "
+                    f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
                 )
                 await set_embeddings_in_progress(api, event.project_id, False)
                 return JSONResponse(
@@ -150,19 +163,14 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 )
             else:
                 await set_embeddings_in_progress(api, event.project_id, False)
-                message = f"Embeddings creation for project {event.project_id} has been completed."
+                message = f"{collection_msg} Embeddings creation has been completed."
                 sly.logger.info(message)
                 return JSONResponse({ResponseFields.MESSAGE: message})
         except Exception as e:
-            sly.logger.error(
-                "Error while creating embeddings for project %s: %s", event.project_id, str(e)
-            )
+            message = f"{collection_msg} Error while creating embeddings: {str(e)}"
+            sly.logger.error(message, exc_info=True)
             await set_embeddings_in_progress(api, event.project_id, False)
-            return JSONResponse(
-                {
-                    ResponseFields.MESSAGE: f"Error while creating embeddings for project {event.project_id}: {str(e)}"
-                }
-            )
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
     task_id = f"embeddings_{event.project_id}_{datetime.datetime.now().timestamp()}"
     task = asyncio.create_task(execute())
@@ -173,50 +181,6 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             ResponseFields.BACKGROUND_TASK_ID: task_id,
         }
     )
-
-
-@app.event(Event.UpdateEmbeddingsPayload, use_state=True)
-@timeit
-async def update_embeddings_payload(api: sly.Api, event: Event.Embeddings) -> None:
-    """
-    Updates the embeddings payload for all images in the project.
-    This is useful when you want to update the embeddings without recalculating them.
-    """
-    sly.logger.info(
-        f"Started updating embeddings payload for project {event.project_id}",
-        extra={"project_id": event.project_id},
-    )
-    project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
-
-    # Step 0: Check if embeddings in progress.
-    if project_info.embeddings_in_progress:
-        message = (
-            f"Embeddings creation is already in progress for project {event.project_id}. Skipping."
-        )
-        sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message})
-
-    image_infos = await image_get_list_async(api, event.project_id)
-    populate_response = await qdrant.populate_payloads(event.project_id, image_infos)
-
-    # if in_qdrant is None:
-    #     message = f"It is not possible to detect if project {event.project_id} has items in Qdrant. Will be skipped."
-    #     sly.logger.info(message)
-    #     return JSONResponse({ResponseFields.MESSAGE: message})
-
-    # Step 1: Check if any point in qdrant belongs to this project.
-    # if project_info.is_embeddings_updated and not in_qdrant:
-    #     message = (
-    #         f"Project {event.project_id} has no relative points in Qdrant. Payload will be updated."
-    #     )
-
-    # Step 2: Update payloads for images.
-    image_infos = await image_get_list_async(api, event.project_id)
-    if image_infos is None or len(image_infos) == 0:
-        return JSONResponse({ResponseFields.MESSAGE: "Project is empty."})
-
-    #! change method
-    image_infos = await process_images(api, event.project_id, image_infos=image_infos)
 
 
 @app.event(Event.Search, use_state=True)

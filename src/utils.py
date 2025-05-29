@@ -11,8 +11,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import (CollectionItem,
-                                                     CollectionType)
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 
@@ -380,12 +379,36 @@ def get_pcd_by_name(
 def set_embeddings_updated_at(
     api: sly.Api,
     image_infos: List[Union[sly.ImageInfo, ImageInfoLite]],
-    timestamp: str = None,
+    timestamps: Optional[List[str]] = None,
 ):
     """Sets the embeddings updated at timestamp for the images."""
     ids = [image_info.id for image_info in image_infos]
     ids = list(set(ids))
-    api.image.set_embeddings_updated_at(ids, timestamp)
+    api.image.set_embeddings_updated_at(ids, timestamps)
+
+
+@to_thread
+@timeit
+def set_project_embeddings_updated_at(
+    api: sly.Api,
+    project_id: int,
+    timestamp: str = None,
+):
+    """Sets the embeddings updated at timestamp for the project."""
+    if timestamp is None:
+        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    custom_data = api.project.get_custom_data(project_id)
+    custom_data[ApiField.EMBEDDINGS_UPDATED_AT] = timestamp
+    api.project.update_custom_data(project_id, custom_data, silent=True)
+
+
+@to_thread
+@timeit
+def get_project_embeddings_updated_at(api: sly.Api, project_id: int) -> Optional[str]:
+    """Gets the embeddings updated at timestamp for the project."""
+
+    custom_data = api.project.get_custom_data(project_id)
+    return custom_data.get(ApiField.EMBEDDINGS_UPDATED_AT, None)
 
 
 @to_thread
@@ -399,6 +422,41 @@ def set_embeddings_in_progress(api: sly.Api, project_id: int, in_progress: bool)
 @timeit
 def get_file_info(api: sly.Api, team_id: int, path: str):
     return api.file.get_info_by_path(team_id, path)
+
+
+@timeit
+async def create_lite_image_infos(
+    cas_size: int,
+    image_infos: List[sly.ImageInfo],
+) -> List[ImageInfoLite]:
+    """Returns lite version of image infos to cut off unnecessary data.
+
+    :param cas_size: Size of the image for CAS, it will be added to URL.
+    :type cas_size: int
+    :param image_infos: List of image infos to get lite version from.
+    :type image_infos: List[sly.ImageInfo]
+    :return: List of lite version of image infos.
+    :rtype: List[ImageInfoLite]
+    """
+    if not image_infos or len(image_infos) == 0:
+        return []
+    if isinstance(image_infos[0], ImageInfoLite):
+        return image_infos
+    return [
+        ImageInfoLite(
+            id=image_info.id,
+            dataset_id=image_info.dataset_id,
+            full_url=image_info.full_storage_url,
+            cas_url=resize_image_url(
+                image_info.full_storage_url,
+                method="fit",
+                width=cas_size,
+                height=cas_size,
+            ),
+            updated_at=image_info.updated_at,
+        )
+        for image_info in image_infos
+    ]
 
 
 @timeit
@@ -435,26 +493,8 @@ async def get_lite_image_infos(
 
     if len(image_infos) == 0:
         return []
-    if isinstance(image_infos[0], ImageInfoLite):
-        return image_infos
-    return [
-        ImageInfoLite(
-            id=image_info.id,
-            dataset_id=image_info.dataset_id,
-            project_id=project_id,
-            hash=image_info.hash,
-            link=image_info.link,
-            full_url=image_info.full_storage_url,
-            cas_url=resize_image_url(
-                image_info.full_storage_url,
-                method="fit",
-                width=cas_size,
-                height=cas_size,
-            ),
-            updated_at=image_info.updated_at,
-        )
-        for image_info in image_infos
-    ]
+    image_infos = await create_lite_image_infos(cas_size, image_infos)
+    return image_infos
 
 
 def parse_timestamp(
@@ -532,6 +572,30 @@ async def run_safe(func, *args, **kwargs):
         return None
 
 
+def create_created_after_filter(timestamp: str) -> Dict:
+    """Create filter for images created after a specific date.
+
+    :param timestamp: Timestamp in ISO format (e.g., "2021-01-22T19:37:50.158Z").
+    :type timestamp: str
+    :return: Dictionary representing the filter.
+    :rtype: Dict
+    """
+    return {
+        ApiField.FIELD: ApiField.EMBEDDINGS_UPDATED_AT,  #! replace with embeddings_updated_at
+        ApiField.OPERATOR: "gt",  #! replace with "eq"
+        ApiField.VALUE: timestamp,  #! none
+    }
+
+
+def create_deleted_after_filter(timestamp: str) -> Dict:
+    """Create filter for images deleted after a specific date."""
+    return {
+        ApiField.FIELD: ApiField.UPDATED_AT,
+        ApiField.OPERATOR: "gt",
+        ApiField.VALUE: timestamp,
+    }
+
+
 @timeit
 async def image_get_list_async(
     api: sly.Api,
@@ -540,6 +604,8 @@ async def image_get_list_async(
     images_ids: List[int] = None,
     per_page: int = 500,
     with_embeddings_updated_at: bool = True,
+    created_after_filter: Optional[str] = None,
+    deleted_after_filter: Optional[str] = None,
 ) -> List[sly.ImageInfo]:
     method = "images.list"
     base_data = {
@@ -552,14 +618,24 @@ async def image_get_list_async(
     if dataset_id is not None:
         base_data[ApiField.DATASET_ID] = dataset_id
 
+    if created_after_filter and deleted_after_filter:
+        raise ValueError("Both created_after and deleted_after cannot be set at the same time.")
+    if created_after_filter is not None:
+        base_data[ApiField.FILTER] = [create_created_after_filter(created_after_filter)]
+    if deleted_after_filter is not None:
+        if ApiField.FILTER not in base_data:
+            base_data[ApiField.FILTER] = []
+        base_data[ApiField.FILTER].append(create_deleted_after_filter(deleted_after_filter))
+        base_data[ApiField.SHOW_DISABLED] = True
+
     semaphore = api.get_default_semaphore()
     all_items = []
     tasks = []
 
-    async def _get_all_pages(batch_filters):
+    async def _get_all_pages(batch_filters: List[Dict]):
         page_data = base_data.copy()
         if batch_filters:
-            page_data[ApiField.FILTER] = batch_filters
+            page_data[ApiField.FILTER].extend(batch_filters)
         page_data[ApiField.PAGE] = 1
 
         async with semaphore:
@@ -906,25 +982,3 @@ def link_to_uuid(image_link: str) -> uuid.UUID:
     # Create a deterministic UUID based on the image link using uuid5 with a namespace
     # Using URL namespace for links
     return uuid.uuid5(uuid.NAMESPACE_URL, image_link)
-
-
-@to_thread
-def prepare_ids(image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]) -> List[str]:
-    """Prepare Qdrant Collection IDs for the specified image infos.
-
-    :param image_infos: A list of ImageInfo or ImageInfoLite objects.
-    :type image_infos: List[Union[sly.ImageInfo, ImageInfoLite]]
-    :return: A list of IDs.
-    :rtype: List[str]
-    """
-    ids = []
-    for info in image_infos:
-        if info.hash is not None:
-            ids.append(str(hash_to_uuid(info.hash)))
-        elif info.link is not None:
-            ids.append(str(link_to_uuid(info.link)))
-        else:
-            raise ValueError(
-                f"ImageInfoLite object must have either hash or link field set. Got {info}"
-            )
-    return ids

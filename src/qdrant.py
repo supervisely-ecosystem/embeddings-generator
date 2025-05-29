@@ -25,7 +25,6 @@ from src.utils import (
     ResponseFields,
     TupleFields,
     parse_timestamp,
-    prepare_ids,
     timeit,
     with_retries,
 )
@@ -180,29 +179,30 @@ def get_search_filter(
 
 @with_retries()
 async def delete_collection_items(
-    image_infos: List[sly.ImageInfo], collection_name: str = IMAGES_COLLECTION
+    collection_name: str,
+    image_infos: List[sly.ImageInfo],
 ) -> Dict[str, Any]:
     """Delete a collection items with the specified IDs.
-    For IMAGES_COLLECTION IDs must be strings, that are UUIDs of the images.
-    Returns the payloads of the deleted items.
 
+    :param collection_name: The name of the collection to delete items from
+    :type collection_name: str
     :param image_infos: A list of ImageInfo objects to delete.
     :type image_infos: List[ImageInfo]
-    :param collection_name: The name of the collection to delete items from, defaults to IMAGES_COLLECTION.
-    :type collection_name: str
     :return: The payloads of the deleted items.
     :rtype: Dict[str, Any]
     """
-    ids = await prepare_ids(image_infos)
+    if isinstance(collection_name, int):
+        collection_name = str(collection_name)
 
-    sly.logger.debug("Deleting items from collection %s...", ids)
+    ids = [info.id for info in image_infos]
+
+    sly.logger.debug(f"[Collection: {collection_name}] Deleting items from collection %s...", ids)
     try:
-        payloads = await get_item_payloads(collection_name, ids)
-        await client.delete(collection_name, ids)
-        sly.logger.debug("Items %s deleted.", ids)
-        return payloads
+        await client.delete(collection_name, ids, wait=False)
     except UnexpectedResponse:
-        sly.logger.debug("Something went wrong, while deleting %s .", ids)
+        sly.logger.debug(
+            f"[Collection: {collection_name}] Something went wrong, while deleting {ids}."
+        )
 
 
 @with_retries()
@@ -585,3 +585,18 @@ async def update_payloads(
         ],
         wait=wait,
     )
+
+
+@with_retries()
+async def delete_collection(collection_name: str) -> None:
+    """Delete a collection with the specified name.
+
+    :param collection_name: The name of the collection to delete.
+    :type collection_name: str
+    """
+    sly.logger.debug(f"Deleting collection {collection_name}...")
+    try:
+        await client.delete_collection(collection_name)
+        sly.logger.debug(f"Collection {collection_name} deleted.")
+    except UnexpectedResponse:
+        sly.logger.debug(f"Collection {collection_name} wasn't found while deleting.")

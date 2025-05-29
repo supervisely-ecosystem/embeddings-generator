@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import supervisely as sly
 from supervisely.sly_logger import logger
@@ -9,6 +9,7 @@ import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.utils import (
+    create_lite_image_infos,
     fix_vectors,
     get_all_projects,
     get_datasets,
@@ -16,7 +17,6 @@ from src.utils import (
     get_project_info,
     get_team_info,
     parse_timestamp,
-    prepare_ids,
     set_embeddings_updated_at,
     timeit,
 )
@@ -26,96 +26,83 @@ from src.utils import (
 async def process_images(
     api: sly.Api,
     project_id: int,
-    dataset_id: int = None,
-    image_ids: List[int] = None,
-    image_infos: List[sly.ImageInfo] = None,
-    payloads: dict = None,
-) -> None:
+    to_create: List[sly.ImageInfo],
+    to_delete: List[sly.ImageInfo],
+    return_vectors: bool = False,
+    check_collection_exists: bool = True,
+) -> Tuple[List[sly.ImageInfo], List[List[float]]]:
     """Process images from the specified project. Download images, save them to HDF5,
     get vectors from the images and upsert them to Qdrant.
-    Either dataset_id or image_ids should be provided. If the dataset_id is provided,
-    all images from the dataset will be processed. If the image_ids are provided,
-    only images with the specified IDs will be processed.
-
-    Note: this function works only with Qdrant image collection "images".
 
     :param api: Supervisely API object.
     :type api: sly.Api
     :param project_id: Project ID to process images from.
     :type project_id: int
-    :param dataset_id: Dataset ID to process images from.
-    :type dataset_id: int, optional
-    :param image_ids: List of image IDs to process.
-    :type image_ids: List[int], optional
-    :param image_infos: List of image infos to process.
-    :type image_infos: List[sly.ImageInfo], optional
-    :param payloads: Payloads to be used for images to update.
-    :type payloads: dict, optional
+    :param to_create: List of image infos to create in Qdrant.
+    :type to_create: List[sly.ImageInfo]
+    :param to_delete: List of image infos to delete from Qdrant.
+    :type to_delete: List[sly.ImageInfo]
+    :param return_vectors: If True, return vectors of the created images.
+    :type return_vectors: bool
+    :param check_collection_exists: If True, check if the Qdrant collection exists.
+    :type check_collection_exists: bool
+    :return: Tuple of two lists: list of created image infos and list of vectors.
+    :rtype: Tuple[List[sly.ImageInfo], List[List[float]]]
     """
-    # Get image infos from the project.
-    image_infos = await get_lite_image_infos(
-        api,
+
+    collection_msg = f"[Collection: {project_id}]"
+
+    to_create = await create_lite_image_infos(
         cas_size=g.IMAGE_SIZE_FOR_CAS,
-        project_id=project_id,
-        dataset_id=dataset_id,
-        image_ids=image_ids,
-        image_infos=image_infos,
-    )
-    ids = await prepare_ids(image_infos)
-    if payloads is None:
-        payloads = await qdrant.get_item_payloads(collection_name=qdrant.IMAGES_COLLECTION, ids=ids)
-    # Get diff of image infos, check if they are already
-    # in the Qdrant collection and have the same updated_at field.
-    # id_to_info_map = {point_id: image_info for point_id, image_info in zip(ids, image_infos)}
-    diff = await qdrant.get_diff(
-        collection_name=qdrant.IMAGES_COLLECTION,
-        image_infos=image_infos,
-        payloads=payloads,
-        ids=ids,
+        image_infos=to_create,
     )
 
-    if len(diff) == 0:
-        logger.debug("All images are up-to-date.")
-        return image_infos
+    if len(to_create) == 0 and len(to_delete) == 0:
+        logger.debug(f"{collection_msg} All images are up-to-date.")
+        return to_create
+    # if await qdrant.collection_exists(project_id):
+    # Get diff of image infos, check if they are already in the Qdrant collection
+    # to_create = await qdrant.get_diff(collection_name=project_id, image_infos=to_create)
+    # else:
+    if check_collection_exists:
+        await qdrant.get_or_create_collection(project_id)
+    # to_create = []
 
     current_progress = 0
-    total_progress = len(diff)
+    total_progress = len(to_create)
 
-    to_update_payloads = {}
-    image_infos = []
-    references = []
-    for point_id, diff_dict in diff.items():
-        if diff_dict["info"] is not None:
-            image_infos.append(diff_dict["info"])
-            img_refs = (
-                qdrant.ImageReferences(diff_dict["payload"]) if diff_dict["payload"] else None
+    # to_create = []
+    vectors = []
+    if len(to_create) > 0:
+        logger.debug(f"{collection_msg} Images to be vectorized: {total_progress}.")
+        for image_batch in sly.batched(to_create):
+            # Get vectors from images.
+            vectors_batch = await cas.get_vectors(
+                [image_info.cas_url for image_info in image_batch]
             )
-            references.append(img_refs)
-        elif diff_dict["payload"] is not None:
-            to_update_payloads[point_id] = diff_dict["payload"]
-    logger.debug("Images to be processed: %d.", total_progress)
-    for image_batch, references_batch in zip(sly.batched(image_infos), sly.batched(references)):
-        # Get vectors from images.
-        vectors_batch = await cas.get_vectors([image_info.cas_url for image_info in image_batch])
-        vectors_batch = fix_vectors(vectors_batch)
-        logger.debug("Got %d vectors from images.", len(vectors_batch))
+            vectors_batch = fix_vectors(vectors_batch)
+            logger.debug(f"{collection_msg} Got {len(vectors_batch)} vectors for images.")
 
-        # Upsert vectors to Qdrant.
-        await qdrant.upsert(qdrant.IMAGES_COLLECTION, vectors_batch, image_batch, references_batch)
-        current_progress += len(image_batch)
-        logger.debug(
-            "Upserted %d vectors to Qdrant. [%d/%d]",
-            len(vectors_batch),
-            current_progress,
-            total_progress,
-        )
-        await set_embeddings_updated_at(api, image_batch)
-    if len(to_update_payloads) > 0:
-        await qdrant.update_payloads(
-            collection_name=qdrant.IMAGES_COLLECTION, id_to_payload=to_update_payloads
-        )
-    logger.debug("All %d images have been processed.", total_progress)
-    return image_infos
+            # Upsert vectors to Qdrant.
+            await qdrant.upsert(project_id, vectors_batch, image_batch)
+            current_progress += len(image_batch)
+            logger.debug(
+                f"{collection_msg} Upserted {len(vectors_batch)} vectors to Qdrant. [{current_progress}/{total_progress}]",
+            )
+            await set_embeddings_updated_at(api, image_batch)
+
+            if return_vectors:
+                vectors.extend(vectors_batch)
+
+        logger.debug(f"{collection_msg} All {total_progress} images have been vectorized.")
+
+    for image_batch in sly.batched(to_delete):
+        # Delete images from the Qdrant.
+        await qdrant.delete_collection_items(collection_name=project_id, image_infos=image_batch)
+        await set_embeddings_updated_at(api, image_batch, [None * len(image_batch)])
+        logger.debug(f"{collection_msg} Deleted {len(image_batch)} images from Qdrant.")
+
+    return to_create, vectors
 
 
 @timeit
