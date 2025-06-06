@@ -376,7 +376,7 @@ def get_pcd_by_name(
 
 @to_thread
 @timeit
-def set_embeddings_updated_at(
+def set_image_embeddings_updated_at(
     api: sly.Api,
     image_infos: List[Union[sly.ImageInfo, ImageInfoLite]],
     timestamps: Optional[List[str]] = None,
@@ -395,20 +395,15 @@ def set_project_embeddings_updated_at(
     timestamp: str = None,
 ):
     """Sets the embeddings updated at timestamp for the project."""
-    if timestamp is None:
-        timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    custom_data = api.project.get_custom_data(project_id)
-    custom_data[ApiField.EMBEDDINGS_UPDATED_AT] = timestamp
-    api.project.update_custom_data(project_id, custom_data, silent=True)
+    api.project.set_embeddings_updated_at(project_id, timestamp)
 
 
 @to_thread
 @timeit
 def get_project_embeddings_updated_at(api: sly.Api, project_id: int) -> Optional[str]:
     """Gets the embeddings updated at timestamp for the project."""
-
-    custom_data = api.project.get_custom_data(project_id)
-    return custom_data.get(ApiField.EMBEDDINGS_UPDATED_AT, None)
+    project_info = api.project.get_info_by_id(project_id)
+    return project_info.embeddings_updated_at
 
 
 @to_thread
@@ -572,23 +567,25 @@ async def run_safe(func, *args, **kwargs):
         return None
 
 
-def create_created_after_filter(timestamp: str) -> Dict:
-    """Create filter for images created after a specific date.
+def get_filter_images_wo_embeddings() -> Dict:
+    """Create filter to get images that dont have embeddings.
 
-    :param timestamp: Timestamp in ISO format (e.g., "2021-01-22T19:37:50.158Z").
-    :type timestamp: str
     :return: Dictionary representing the filter.
     :rtype: Dict
     """
     return {
-        ApiField.FIELD: ApiField.EMBEDDINGS_UPDATED_AT,  #! replace with embeddings_updated_at
-        ApiField.OPERATOR: "gt",  #! replace with "eq"
-        ApiField.VALUE: timestamp,  #! none
+        ApiField.FIELD: ApiField.EMBEDDINGS_UPDATED_AT,
+        ApiField.OPERATOR: "eq",
+        ApiField.VALUE: None,
     }
 
 
-def create_deleted_after_filter(timestamp: str) -> Dict:
-    """Create filter for images deleted after a specific date."""
+def get_filter_deleted_after(timestamp: str) -> Dict:
+    """Create filter to get images deleted after a specific date.
+
+    :return: Dictionary representing the filter.
+    :rtype: Dict
+    """
     return {
         ApiField.FIELD: ApiField.UPDATED_AT,
         ApiField.OPERATOR: "gt",
@@ -603,9 +600,9 @@ async def image_get_list_async(
     dataset_id: int = None,
     images_ids: List[int] = None,
     per_page: int = 500,
-    with_embeddings_updated_at: bool = True,
-    created_after_filter: Optional[str] = None,
-    deleted_after_filter: Optional[str] = None,
+    # with_embeddings_updated_at: bool = True,
+    wo_embeddings: Optional[bool] = False,
+    deleted_after: Optional[str] = None,
 ) -> List[sly.ImageInfo]:
     method = "images.list"
     base_data = {
@@ -613,19 +610,19 @@ async def image_get_list_async(
         ApiField.FORCE_METADATA_FOR_LINKS: False,
         ApiField.PER_PAGE: per_page,
     }
-    if with_embeddings_updated_at:
-        base_data[ApiField.EXTRA_FIELDS] = [ApiField.EMBEDDINGS_UPDATED_AT]
+    # if with_embeddings_updated_at:
+    #     base_data[ApiField.EXTRA_FIELDS] = [ApiField.EMBEDDINGS_UPDATED_AT]
     if dataset_id is not None:
         base_data[ApiField.DATASET_ID] = dataset_id
 
-    if created_after_filter and deleted_after_filter:
+    if wo_embeddings and deleted_after:
         raise ValueError("Both created_after and deleted_after cannot be set at the same time.")
-    if created_after_filter is not None:
-        base_data[ApiField.FILTER] = [create_created_after_filter(created_after_filter)]
-    if deleted_after_filter is not None:
+    if wo_embeddings:
+        base_data[ApiField.FILTER] = [get_filter_images_wo_embeddings()]
+    if deleted_after is not None:
         if ApiField.FILTER not in base_data:
             base_data[ApiField.FILTER] = []
-        base_data[ApiField.FILTER].append(create_deleted_after_filter(deleted_after_filter))
+        base_data[ApiField.FILTER].append(get_filter_deleted_after(deleted_after))
         base_data[ApiField.SHOW_DISABLED] = True
 
     semaphore = api.get_default_semaphore()
@@ -795,7 +792,7 @@ async def get_all_projects(
         - updated_at
         - embeddings_enabled
         - embeddings_in_progress
-        - is_embeddings_updated
+        - embeddings_updated_at
         - team_id
         - workspace_id
         - items_count
@@ -806,7 +803,7 @@ async def get_all_projects(
     fields = [
         ApiField.EMBEDDINGS_ENABLED,
         ApiField.EMBEDDINGS_IN_PROGRESS,
-        ApiField.IS_EMBEDDINGS_UPDATED,
+        ApiField.EMBEDDINGS_UPDATED_AT,
     ]
     data = {
         ApiField.SKIP_EXPORTED: True,
@@ -904,6 +901,24 @@ def get_key(prompt: str, project_id: str, settings: Dict) -> str:
     """
     cache_data = {"prompt": prompt, "project_id": project_id, "settings": settings}
     serialized = json.dumps(cache_data, sort_keys=True)
+    return hashlib.md5(serialized.encode()).hexdigest()
+
+
+def generate_key(project_id: int, user_id: int, event: str) -> str:
+    """
+    Generate a unique hash key based on the provided parameters.
+
+    Parameters that must be used to generate the key:
+     - project_id
+     - user_id
+     - event
+    """
+    params = {
+        "project_id": project_id,
+        "user_id": user_id,
+        "event": event,
+    }
+    serialized = json.dumps(params, sort_keys=True)
     return hashlib.md5(serialized.encode()).hexdigest()
 
 

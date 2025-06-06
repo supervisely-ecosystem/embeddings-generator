@@ -16,8 +16,10 @@ from src.utils import (
     get_lite_image_infos,
     get_project_info,
     get_team_info,
+    image_get_list_async,
     parse_timestamp,
-    set_embeddings_updated_at,
+    set_image_embeddings_updated_at,
+    set_project_embeddings_updated_at,
     timeit,
 )
 
@@ -89,7 +91,7 @@ async def process_images(
             logger.debug(
                 f"{collection_msg} Upserted {len(vectors_batch)} vectors to Qdrant. [{current_progress}/{total_progress}]",
             )
-            await set_embeddings_updated_at(api, image_batch)
+            await set_image_embeddings_updated_at(api, image_batch)
 
             if return_vectors:
                 vectors.extend(vectors_batch)
@@ -99,7 +101,7 @@ async def process_images(
     for image_batch in sly.batched(to_delete):
         # Delete images from the Qdrant.
         await qdrant.delete_collection_items(collection_name=project_id, image_infos=image_batch)
-        await set_embeddings_updated_at(api, image_batch, [None * len(image_batch)])
+        await set_image_embeddings_updated_at(api, image_batch, [None * len(image_batch)])
         logger.debug(f"{collection_msg} Deleted {len(image_batch)} images from Qdrant.")
 
     return to_create, vectors
@@ -112,45 +114,45 @@ async def update_embeddings(
     force: bool = False,
     project_info: Optional[sly.ProjectInfo] = None,
 ):
+    collection_msg = f"[Collection: {project_id}] "
+
     if project_info is None:
         project_info = await get_project_info(api, project_id)
-    # Check if embeddings are up-to-date
-    if project_info.is_embeddings_updated is False or force:
-        image_infos = await process_images(api, project_id)
-        if len(image_infos) > 0:
-            await set_embeddings_updated_at(api, image_infos)
-    # elif parse_timestamp(project_info.embeddings_updated_at) < parse_timestamp(
-    #     project_info.updated_at
-    # ):
-    #     # Get all datasets that were updated after the embeddings were updated.
-    #     dataset_infos = await get_datasets(api, project_id, recursive=True)
-    #     dataset_infos = [
-    #         dataset_info
-    #         for dataset_info in dataset_infos
-    #         if parse_timestamp(dataset_info.updated_at)
-    #         > parse_timestamp(project_info.embeddings_updated_at)
-    #     ]
-    #     # Get image IDs for all datasets.
-    #     tasks = []
-    #     for dataset_info in dataset_infos:
-    #         tasks.append(
-    #             asyncio.create_task(
-    #                 get_lite_image_infos(
-    #                     api,
-    #                     cas_size=g.IMAGE_SIZE_FOR_CAS,
-    #                     project_id=project_id,
-    #                     dataset_id=dataset_info.id,
-    #                 )
-    #             )
-    #         )
-    #     results = await asyncio.gather(*tasks)
-    #     image_infos = [info for result in results for info in result]
-    #     if len(image_infos) > 0:
-    #         # image_ids = [info.id for info in image_infos]
-    #         image_infos = await process_images(api, project_id, image_infos=image_infos)
+
+    if force:
+        logger.info(f"{collection_msg} Force enabled, recreating embeddings for all images.")
+        await qdrant.delete_collection(project_id)
+        # do not need to create collection here, it will be created in process_images
+        images_to_create = await image_get_list_async(api, project_id)
+        images_to_delete = []
+    elif project_info.embeddings_updated_at is None:
+        # do not need to check or create collection here, it will be created in process_images
+        logger.info(
+            f"{collection_msg} Embeddings are not updated yet, creating embeddings for all images."
+        )
+        images_to_create = await image_get_list_async(api, project_id)
+        images_to_delete = []
+    elif parse_timestamp(project_info.embeddings_updated_at) < parse_timestamp(
+        project_info.updated_at
+    ):
+        logger.info(
+            f"{collection_msg} Embeddings are outdated, will check for images that need to be updated."
+        )
+        images_to_create = await image_get_list_async(api, project_id, wo_embeddings=True)
+        if project_info.embeddings_updated_at is not None:
+            images_to_delete = await image_get_list_async(
+                api, project_id, deleted_after=project_info.embeddings_updated_at
+            )
+        else:
+            images_to_delete = []
+   
     else:
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
+    image_infos = await process_images(api, project_id, images_to_create, images_to_delete)
+    if len(image_infos) > 0:
+        await set_image_embeddings_updated_at(api, image_infos)
+        await set_project_embeddings_updated_at(api, project_id)
 
 
 @timeit

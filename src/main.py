@@ -34,7 +34,7 @@ from src.utils import (
     run_safe,
     send_request,
     set_embeddings_in_progress,
-    set_embeddings_updated_at,
+    set_image_embeddings_updated_at,
     set_project_embeddings_updated_at,
     timeit,
     update_id_by_hash,
@@ -81,7 +81,6 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     collection_msg = f"[Collection: {event.project_id}] "
 
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
-    last_update = project_info.custom_data.get(ApiField.EMBEDDINGS_UPDATED_AT, None)
 
     # Step 0: Check if embeddings are already in progress.
     if project_info.embeddings_in_progress:
@@ -95,21 +94,25 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         images_to_delete = []
     elif event.image_ids:
         images_to_create = await image_get_list_async(
-            api, event.project_id, images_ids=event.image_ids, created_after_filter=last_update
+            api,
+            event.project_id,
+            images_ids=event.image_ids,
+            wo_embeddings=True,
         )
-        if last_update is not None:
+        if project_info.embeddings_updated_at is not None:
             images_to_delete = await image_get_list_async(
-                api, event.project_id, images_ids=event.image_ids, deleted_after_filter=last_update
+                api,
+                event.project_id,
+                images_ids=event.image_ids,
+                deleted_after=project_info.embeddings_updated_at,
             )
         else:
             images_to_delete = []
     else:
-        images_to_create = await image_get_list_async(
-            api, event.project_id, created_after_filter=last_update
-        )
-        if last_update is not None:
+        images_to_create = await image_get_list_async(api, event.project_id, wo_embeddings=True)
+        if project_info.embeddings_updated_at is not None:
             images_to_delete = await image_get_list_async(
-                api, event.project_id, deleted_after_filter=last_update
+                api, event.project_id, deleted_after=project_info.embeddings_updated_at
             )
         else:
             images_to_delete = []

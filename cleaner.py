@@ -10,7 +10,13 @@ from supervisely.api.entities_collection_api import CollectionType, CollectionTy
 from supervisely.api.module_api import ApiField
 from tqdm import tqdm
 
-from src.utils import batched, get_list_all_pages_async, set_embeddings_in_progress, to_thread, image_get_list_async
+from src.utils import (
+    batched,
+    get_list_all_pages_async,
+    image_get_list_async,
+    set_embeddings_in_progress,
+    to_thread,
+)
 
 api = sly.Api.from_env()
 
@@ -102,31 +108,38 @@ async def get_all_projects(
 
 
 @to_thread
-def process_eua_for_project(
+def clean_image_embeddings_updated_at(
     project_info: sly.ProjectInfo,
     progress: tqdm,
 ):
-    datasets = api.dataset.get_list(project_id=project_info.id)
+    """Set embeddings updated at timestamp to None for all images in the project."""
+    datasets = api.dataset.get_list(project_id=project_info.id, recursive=True)
     if len(datasets) == 0:
         progress.update(1)
         return
-    dataset_id = None
+    dataset_ids = []
     for dataset in datasets:
         if dataset.images_count != 0 or dataset.items_count != 0:
-            dataset_id = dataset.id
+            dataset_ids.append(dataset.id)
             continue
-    if dataset_id is None:
+    if len(dataset_ids) == 0:
         progress.update(1)
         return
     try:
-        images = api.image.get_list(dataset_id=dataset_id, limit=1)
+        image_ids = []
+        for dataset_id in dataset_ids:
+            sly.logger.debug(
+                f"Getting images for project ID {project_info.id} dataset ID {dataset_id}"
+            )
+            image_ids.extend([image.id for image in api.image.get_list(dataset_id=dataset_id)])
+        timestamps = [None] * len(image_ids)
     except Exception as e:
         sly.logger.warning(
             f"Failed to get images for project ID {project_info.id} dataset ID {dataset_id}: {e}"
         )
         progress.update(1)
         return
-    api.image.set_embeddings_updated_at(ids=[images[0].id], timestamps=[None])
+    api.image.set_embeddings_updated_at(ids=image_ids, timestamps=timestamps)
     sly.logger.debug(f"Set embeddings updated at to None for project {project_info.name}")
     progress.update(1)
 
@@ -191,7 +204,7 @@ def main():
     progress_updated_at = tqdm(desc="Set embeddings updated at to None", total=len(project_infos))
     tasks = []
     for project_info in project_infos:
-        tasks.append(process_eua_for_project(project_info, progress_updated_at))
+        tasks.append(clean_image_embeddings_updated_at(project_info, progress_updated_at))
         tasks.append(set_embeddings_in_progress(api, project_info.id, False))
     if len(tasks) > 0:
         sly.run_coroutine(asyncio.gather(*tasks))
