@@ -47,10 +47,9 @@ class QdrantFields:
     CENTROIDS = "centroids"
 
     # Payload Fields
-    REFERENCE_IDS = "reference_ids"
-    PROJECT_ID = "project_ids"
-    DATASET_ID = "dataset_ids"
-    IMAGE_ID = "image_ids"
+    DATASET_ID = "dataset_id"
+    IMAGE_ID = "image_id"
+    ID = "id"
 
 
 class EventFields:
@@ -293,7 +292,7 @@ def get_project_info(api: sly.Api, project_id: int) -> sly.ProjectInfo:
     :return: Project info.
     :rtype: sly.ProjectInfo
     """
-    return api.project.get_info_by_id(project_id, with_embeddings_info=True)
+    return api.project.get_info_by_id(project_id)
 
 
 @to_thread
@@ -860,32 +859,6 @@ async def get_all_projects(
     return results
 
 
-def update_id_by_hash(
-    source_infos: List[ImageInfoLite], target_infos: List[ImageInfoLite]
-) -> List[ImageInfoLite]:
-    """Updates the ID of the target image infos by the hash of the source image infos.
-
-    :param source_infos: Source image infos to get IDs from.
-    :type source_infos: List[ImageInfoLite]
-    :param target_infos: Target image infos to update IDs.
-    :type target_infos: List[ImageInfoLite]
-    :return: List of target image infos with updated IDs.
-    :rtype: List[ImageInfoLite]
-    """
-    hash_to_id = {info.hash: info.id for info in source_infos}
-
-    for info in target_infos:
-        if info.hash in hash_to_id:
-            info.id = hash_to_id[info.hash]
-        else:
-            sly.logger.warning(
-                "Hash %s not found in source infos. This should not happen.",
-                info.hash,
-            )
-
-    return target_infos
-
-
 def get_key(prompt: str, project_id: str, settings: Dict) -> str:
     """
     Generate a unique hash key for a search request.
@@ -904,20 +877,15 @@ def get_key(prompt: str, project_id: str, settings: Dict) -> str:
     return hashlib.md5(serialized.encode()).hexdigest()
 
 
-def generate_key(project_id: int, user_id: int, event: str) -> str:
+def generate_key(project_id: int, user_token: str) -> str:
     """
     Generate a unique hash key based on the provided parameters.
 
     Parameters that must be used to generate the key:
      - project_id
-     - user_id
-     - event
+     - user_token
     """
-    params = {
-        "project_id": project_id,
-        "user_id": user_id,
-        "event": event,
-    }
+    params = {"project_id": project_id, "user_token": user_token}
     serialized = json.dumps(params, sort_keys=True)
     return hashlib.md5(serialized.encode()).hexdigest()
 

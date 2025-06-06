@@ -129,14 +129,11 @@ class ImageReferences:
 
 
 def get_search_filter(
-    project_id: Optional[int] = None,
     dataset_id: Optional[int] = None,
     image_ids: Optional[List[int]] = None,
 ):
     """Get search filter for Qdrant collection.
 
-    :param project_id: Project ID to filter by.
-    :type project_id: Optional[int], optional
     :param dataset_id: Dataset ID to filter by.
     :type dataset_id: Optional[int], optional
     :param image_ids: List of image IDs to filter by.
@@ -149,10 +146,7 @@ def get_search_filter(
     if image_ids:
         filter = models.Filter(
             must=[
-                models.FieldCondition(
-                    key=QdrantFields.IMAGE_ID,
-                    match=models.MatchAny(any=image_ids),
-                ),
+                models.HasIdCondition(has_id=image_ids),
             ],
         )
     elif dataset_id:
@@ -161,15 +155,6 @@ def get_search_filter(
                 models.FieldCondition(
                     key=QdrantFields.DATASET_ID,
                     match=models.MatchAny(any=[dataset_id]),
-                ),
-            ],
-        )
-    elif project_id:
-        filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key=QdrantFields.PROJECT_ID,
-                    match=models.MatchAny(any=[project_id]),
                 ),
             ],
         )
@@ -241,13 +226,9 @@ async def get_or_create_collection(
             field_schema="keyword",
         )
 
-        # await client.create_payload_index(
-        #     collection_name=collection_name,
-        #     field_name=f"{QdrantFields.IMAGE_ID}",
-        #     field_schema="keyword",
-        # )
-
-        sly.logger.debug("Created payload indexes for collection %s", collection_name)
+        sly.logger.debug(
+            f"{QdrantFields.DATASET_ID} field indexed for collection {collection_name}"
+        )
 
         collection = await client.get_collection(collection_name)
     return collection
@@ -288,8 +269,6 @@ async def get_items_by_id(
     :return: A list of vectors.
     :rtype: List[np.ndarray]
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
 
     points = await client.retrieve(
         collection_name=collection_name,
@@ -461,8 +440,6 @@ async def search(
     :return: A dictionary with keys "items", "vectors" and "scores".
     :rtype: Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
 
     response = await client.query_points(
         collection_name=collection_name,

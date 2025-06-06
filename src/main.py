@@ -16,7 +16,9 @@ from src.events import Event
 from src.functions import auto_update_all_embeddings, process_images, update_embeddings
 from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
-from src.search_cache import CollectionItem, SearchCache
+
+# from src.search_cache import CollectionItem, SearchCache
+from src.project_collection_manager import ProjectCollectionManager
 from src.utils import (
     ApiField,
     ClusteringMethods,
@@ -37,7 +39,6 @@ from src.utils import (
     set_image_embeddings_updated_at,
     set_project_embeddings_updated_at,
     timeit,
-    update_id_by_hash,
 )
 from src.visualization import (
     create_projections,
@@ -126,33 +127,21 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         try:
             await set_embeddings_in_progress(api, event.project_id, True)
 
-            # Step 2: If force is True, delete the collection and recreate it.
-            if event.force and not project_info.embeddings_in_progress:
+            # Step 2: If force is True, delete the collection.
+            if event.force:
                 sly.logger.debug(f"{collection_msg} Force enabled, deleting collection.")
                 await qdrant.delete_collection(event.project_id)
 
-            await qdrant.get_or_create_collection(event.project_id)
-
-            # Step 3: Process images.
+            # Step 3: Process images. Check and create collection if needed.
             image_infos, vectors = await process_images(
                 api,
                 event.project_id,
                 to_create=images_to_create,
                 to_delete=images_to_delete,
                 return_vectors=event.return_vectors,
-                check_collection_exists=False,
             )
-
-            # if len(image_infos) > 0:
-            #     # Step 4: Delete all AI Search Entities Collections in the project as they are outdated.
-
-            #     await SearchCache.drop_cache(api, event.project_id)
             await set_project_embeddings_updated_at(api, event.project_id)
             if event.return_vectors:
-                # _, vectors = await qdrant.get_items_by_id(
-                #     qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
-                # )
-
                 sly.logger.info(
                     f"{collection_msg} Embeddings creation has been completed. "
                     f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
@@ -211,48 +200,15 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             },
         )
 
-        settings = {
-            EventFields.LIMIT: event.limit,
-            EventFields.BY_IMAGE_IDS: event.by_image_ids if event.by_image_ids else None,
-            EventFields.IMAGE_IDS: event.image_ids,
-            EventFields.DATASET_ID: event.dataset_id,
-            EventFields.THRESHOLD: event.threshold,
-        }
+        # ----------------- Step 0: Initialise Collection Manager And List Of Image Infos ---------------- #
 
-        # ------------------------ Step 1: Get Cache For The Search If Available. ------------------------ #
-        prompt_str = (
-            ",".join(event.prompt) if isinstance(event.prompt, list) else str(event.prompt or "")
-        )
-        cache = SearchCache(api, event.project_id, prompt_str, settings)
-
-        if cache.collection_id is not None and cache.updated_at is not None:
-            if cache.project_info.is_embeddings_updated is False:
-                # If the project has outdated embeddings, invalidate the cache.
-                sly.logger.info(
-                    "Project %s has outdated embeddings. Invalidating cache.", event.project_id
-                )
-                await cache.clear()
-            else:
-                sly.logger.info("Using cached search results")
-                return JSONResponse({ResponseFields.COLLECTION_ID: cache.collection_id})
+        collection_manager = ProjectCollectionManager(api, event.project_id)
 
         # Collect project images info to use later for mapping.
         image_infos = await image_get_list_async(api, event.project_id)
         if image_infos is None or len(image_infos) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "Project is empty."})
 
-        # ------------------------- Step 2: Update Payloads In Qdrant If Needed. ------------------------- #
-        populate_response = await qdrant.populate_payloads(event.project_id, image_infos)
-        if isinstance(populate_response, List):
-            sly.logger.debug(
-                f"Project {event.project_id} does not have {len(populate_response)} images in Qdrant. Will update embeddings."
-            )
-            image_infos_to_update = [image_infos[i] for i in populate_response]
-            if len(image_infos_to_update) > 0:
-                await process_images(api, event.project_id, image_infos=image_infos_to_update)
-        elif isinstance(populate_response, JSONResponse):
-            return populate_response
-        #! remove deleted items from payloads
         # -------------------- Step 3: Prepare Text Prompts And Image URLs For Search -------------------- #
         text_prompts = []
         if event.prompt:
@@ -279,7 +235,6 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 len(lite_image_infos),
             )
             image_urls = [image_info.cas_url for image_info in lite_image_infos]
-            #! check if we need to separate requests
 
         # Combine text prompts and image URLs to create a query.
         queries = text_prompts + image_urls
@@ -320,15 +275,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         elif event.dataset_id:
             # If dataset_id is provided, create a filter for the search.
             search_filter = qdrant.get_search_filter(dataset_id=event.dataset_id)
-        else:
-            # If project_id is provided, create a filter for the search.
-            search_filter = qdrant.get_search_filter(project_id=event.project_id)
 
         for vector, query in zip(query_vectors, queries):
             tasks.append(
                 asyncio.create_task(
                     _search_task(
-                        collection=qdrant.IMAGES_COLLECTION,
+                        collection=event.project_id,
                         vector=vector,
                         limit=event.limit,
                         query_filter=search_filter,
@@ -344,7 +296,6 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             if len(items) == 0:
                 sly.logger.debug("No similar images found for query %s", query)
                 continue
-            items = update_id_by_hash(image_infos, items)
             # items = [info.to_json() for info in items]
             if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
                 for i, score in enumerate(search_results[qdrant.SearchResultField.SCORES]):
@@ -352,12 +303,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             else:
                 for i in range(len(items)):
                     items[i].score = None
-            results.extend(items)
+            results.extend(items)  #! check if we need to select higher score result for same items
             sly.logger.debug("Found %d similar images for a query %s", len(items), query)
         if len(results) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "No similar images found."})
-        # Cache the results before returning them
-        collection_id = await cache.save(results)
+        # Save the results to the Entities Collection.
+        collection_id = await collection_manager.save(results)
         return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
     except Exception as e:
         sly.logger.error(f"Error during search: {str(e)}", exc_info=True)
@@ -399,29 +350,15 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         image_infos = await image_get_list_async(api, event.project_id, dataset_id=event.dataset_id)
     else:
         image_infos = await image_get_list_async(api, event.project_id)
-        # image_hashes = [info.hash for info in image_infos]
 
-    # ------------------------- Step 2: Update Payloads In Qdrant If Needed. ------------------------- #
-    populate_response = await qdrant.populate_payloads(event.project_id, image_infos)
-    if isinstance(populate_response, List):
-        sly.logger.debug(
-            f"Project {event.project_id} does not have {len(populate_response)} images in Qdrant. Will update embeddings."
-        )
-        image_infos_to_update = [image_infos[i] for i in populate_response]
-        await process_images(api, event.project_id, image_infos=image_infos_to_update)
-    elif isinstance(populate_response, JSONResponse):
-        return populate_response
-    #! remove deleted items from payloads
-
+    ids = [info.id for info in image_infos]
     # ----------------------------- Step 3: Get Image Vectors From Qdrant ---------------------------- #
     image_infos_result, vectors = await qdrant.get_items_by_id(
-        qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
+        event.project_id, ids, with_vectors=True
     )
 
     if len(vectors) == 0:
         return JSONResponse({ResponseFields.MESSAGE: "No vectors found."})
-
-    image_infos_result = update_id_by_hash(image_infos, image_infos_result)
 
     # ------------------------- Step 4: Prepare Data For Projections Service ------------------------- #
     data = {
@@ -451,14 +388,8 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     if len(result) == 0:
         return JSONResponse({ResponseFields.MESSAGE: "No diverse images found."})
 
-    # Delete existing collection items if any and create a new collection for the diverse population.
-    collection_id = await create_collection_and_populate(
-        api=api,
-        project_id=event.project_id,
-        name=f"Diverse Population for {event.project_id}",
-        event=EventFields.DIVERSE,
-        image_ids=result,
-    )
+    collection_manager = ProjectCollectionManager(api, event.project_id)
+    collection_id = await collection_manager.save(result)  #! results must be infos
     return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
 
 
@@ -528,11 +459,11 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
         image_infos = await image_get_list_async(api, event.project_id, images_ids=event.image_ids)
     else:
         image_infos = await image_get_list_async(api, event.project_id)
-    # image_hashes = [info.hash for info in image_infos]
+    ids = [info.id for info in image_infos]
     image_infos_result, vectors = await qdrant.get_items_by_id(
-        qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
+        event.project_id, ids, with_vectors=True
     )
-    image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+
     data = {"vectors": vectors, "reduce": True}
     if event.reduction_dimensions:
         data["reduction_dimensions"] = event.reduction_dimensions

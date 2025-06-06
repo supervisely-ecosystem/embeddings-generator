@@ -23,7 +23,6 @@ from src.utils import (
     parse_timestamp,
     send_request,
     timeit,
-    update_id_by_hash,
 )
 
 
@@ -59,8 +58,7 @@ async def create_projections(
 
     image_infos_result, vectors = await qdrant.get_items_by_id(
         qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
-    )
-    image_infos_result = update_id_by_hash(image_infos, image_infos_result)
+    )    
     projections = await send_request(
         api,
         g.projections_service_task_id,

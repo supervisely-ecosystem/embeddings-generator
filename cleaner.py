@@ -176,31 +176,31 @@ def switch_off_auto_update(
 
 
 def main():
-    project_infos = sly.run_coroutine(get_all_projects(api))
+    # project_infos = sly.run_coroutine(get_all_projects(api))
 
-    if len(project_infos) == 0:
-        sly.logger.info("No projects found with embeddings update enabled.")
-        return
+    # if len(project_infos) == 0:
+    #     sly.logger.info("No projects found with embeddings update enabled.")
+    #     return
 
-    collections = []
-    progress_collections = tqdm(desc="Get collections", total=len(project_infos))
-    tasks = []
-    for project_info in project_infos:
-        tasks.append(get_collections(project_info, collections, progress_collections))
-    if len(tasks) > 0:
-        sly.run_coroutine(asyncio.gather(*tasks))
+    # collections = []
+    # progress_collections = tqdm(desc="Get collections", total=len(project_infos))
+    # tasks = []
+    # for project_info in project_infos:
+    #     tasks.append(get_collections(project_info, collections, progress_collections))
+    # if len(tasks) > 0:
+    #     sly.run_coroutine(asyncio.gather(*tasks))
 
-    if len(collections) == 0:
-        sly.logger.info("No collections found in projects.")
-        return
+    # if len(collections) == 0:
+    #     sly.logger.info("No collections found in projects.")
+    #     return
 
-    progress_remove = tqdm(desc="Remove collections", total=len(collections))
-    tasks = []
-    for collection in collections:
-        tasks.append(remove_collections(collection, progress_remove))
-    if len(tasks) > 0:
-        sly.run_coroutine(asyncio.gather(*tasks))
-
+    # progress_remove = tqdm(desc="Remove collections", total=len(collections))
+    # tasks = []
+    # for collection in collections:
+    #     tasks.append(remove_collections(collection, progress_remove))
+    # if len(tasks) > 0:
+    #     sly.run_coroutine(asyncio.gather(*tasks))
+    project_infos = [api.project.get_info_by_id(5)]
     progress_updated_at = tqdm(desc="Set embeddings updated at to None", total=len(project_infos))
     tasks = []
     for project_info in project_infos:
