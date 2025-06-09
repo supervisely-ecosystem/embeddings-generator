@@ -414,7 +414,7 @@ def set_embeddings_in_progress(api: sly.Api, project_id: int, in_progress: bool)
 
 @to_thread
 @timeit
-def get_file_info(api: sly.Api, team_id: int, path: str):
+def get_team_file_info(api: sly.Api, team_id: int, path: str):
     return api.file.get_info_by_path(team_id, path)
 
 
@@ -688,9 +688,14 @@ async def embeddings_up_to_date(
 ):
     if project_info is None:
         project_info = await get_project_info(api, project_id)
-    if project_info.is_embeddings_updated is None:
+    if project_info is None:
+        return None
+    if project_info.embeddings_updated_at is None:
         return False
-    return project_info.is_embeddings_updated
+    images_to_create = await image_get_list_async(api, project_id, wo_embeddings=True)
+    if len(images_to_create) > 0:
+        return False
+    return True
 
 
 async def get_list_all_pages_async(
@@ -900,7 +905,7 @@ def create_collection_and_populate(
     collection_type: str = CollectionType.AI_SEARCH,
     ai_search_key: str = None,
 ) -> int:
-    """Create a collection in the project.
+    """Create Entities Collection for project.
 
     **NOTE**: For events CLUSTERING, DIVERSE, and EMBEDDINGS, collection will be recreated if it already exists.
 

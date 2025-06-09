@@ -52,10 +52,12 @@ class ProjectCollectionManager:
             # If collection already exists, remove it first
             self.api.entities_collection.remove(self.collection_id, force=True)
             self.collection_id = None
-        collection_items = [
-            CollectionItem(entity_id=info.id, meta=CollectionItem.Meta(score=info.score))
-            for info in results
-        ]
+
+        collection_items = []
+        for info in results:
+            meta = CollectionItem.Meta(score=info.score) if info.score is not None else None
+            collection_items.append(CollectionItem(entity_id=info.id, meta=meta))
+
         self.collection_id = self.api.entities_collection.create(
             project_id=self.project_id,
             name=self.collection_name,

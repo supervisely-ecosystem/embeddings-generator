@@ -251,40 +251,6 @@ async def collection_exists(collection_name: str) -> bool:
         return False
 
 
-@with_retries()
-@timeit
-async def get_items_by_id(
-    collection_name: str,
-    image_ids: List[int],
-    with_vectors: bool = False,
-) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
-    """Get vectors from the collection based on the image IDs.
-
-    :param collection_name: The name of the collection to get vectors from.
-    :type collection_name: str
-    :param image_ids: A list image IDs to retrieve from the collection.
-    :type image_ids: List[int]
-    :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
-    :type with_vectors: bool, optional
-    :return: A list of vectors.
-    :rtype: List[np.ndarray]
-    """
-
-    points = await client.retrieve(
-        collection_name=collection_name,
-        ids=image_ids,
-        with_payload=True,
-        with_vectors=with_vectors,
-    )
-
-    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
-
-    if with_vectors:
-        vectors = [point.vector for point in points]
-        return image_infos, vectors
-    return image_infos
-
-
 @with_retries(retries=5, sleep_time=2)
 @timeit
 async def upsert(
@@ -468,7 +434,10 @@ async def search(
 @with_retries()
 @timeit
 async def get_items(
-    collection_name: str, limit: int = None
+    collection_name: str,
+    limit: int = None,
+    batch_size: int = 10000, 
+    with_vectors: bool = False,
 ) -> Tuple[List[ImageInfoLite], List[np.ndarray]]:
     """Returns specified number of items from the collection. If limit is not specified, returns all items.
 
@@ -476,24 +445,82 @@ async def get_items(
     :type collection_name: str
     :param limit: The number of items to return, defaults to None.
     :type limit: int, optional
+    :param batch_size: The number of items to retrieve in each batch to efficiently get all items, defaults to 10000.
+    :type batch_size: int, optional
+    :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
+    :type with_vectors: bool, optional
     :return: A tuple of ImageInfoLite objects and vectors.
     :rtype: Tuple[List[ImageInfoLite], List[np.ndarray]]
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
+    all_points = []
+    next_offset = None
+    total = 0
+
     if not limit:
         collection = await client.get_collection(collection_name)
         limit = collection.points_count
-    points, _ = await client.scroll(
-        collection_name=collection_name,
-        limit=limit,
-        with_payload=True,
-        with_vectors=True,
-    )
+
+    while total < limit:
+        current_batch_size = min(batch_size, limit - total)
+        points, next_offset = await client.scroll(
+            collection_name=collection_name,
+            limit=current_batch_size,
+            with_payload=True,
+            with_vectors=with_vectors,
+            offset=next_offset,
+        )
+        if not points:
+            break
+        all_points.extend(points)
+        total += len(points)
+        if len(points) < current_batch_size:
+            break  # No more points to fetch
+    
+    all_points = all_points[:limit]
+    
+    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
+
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
-    return [ImageInfoLite(id=point.id, **point.payload) for point in points], [
-        point.vector for point in points
-    ]
+    if with_vectors:
+        vectors = [point.vector for point in points]
+    else:
+        vectors = []
+    return image_infos, vectors
+
+
+@with_retries()
+@timeit
+async def get_items_by_id(
+    collection_name: str,
+    image_ids: List[int],
+    with_vectors: bool = False,
+) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
+    """Get vectors from the collection based on the image IDs.
+
+    :param collection_name: The name of the collection to get vectors from.
+    :type collection_name: str
+    :param image_ids: A list image IDs to retrieve from the collection.
+    :type image_ids: List[int]
+    :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
+    :type with_vectors: bool, optional
+    :return: A list of vectors.
+    :rtype: List[np.ndarray]
+    """
+
+    points = await client.retrieve(
+        collection_name=collection_name,
+        ids=image_ids,
+        with_payload=True,
+        with_vectors=with_vectors,
+    )
+
+    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
+
+    if with_vectors:
+        vectors = [point.vector for point in points]
+    else:
+        vectors = []
+    return image_infos, vectors
 
 
 @with_retries()

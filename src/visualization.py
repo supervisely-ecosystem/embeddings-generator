@@ -13,13 +13,13 @@ from src.pointcloud import upload as upload_pcd
 from src.utils import (
     ImageInfoLite,
     get_dataset_by_name,
-    get_file_info,
     get_lite_image_infos,
     get_or_create_dataset,
     get_or_create_project,
     get_pcd_by_name,
     get_project_info,
     get_project_info_by_name,
+    get_team_file_info,
     parse_timestamp,
     send_request,
     timeit,
@@ -58,7 +58,7 @@ async def create_projections(
 
     image_infos_result, vectors = await qdrant.get_items_by_id(
         qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
-    )    
+    )
     projections = await send_request(
         api,
         g.projections_service_task_id,
