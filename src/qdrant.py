@@ -176,8 +176,6 @@ async def delete_collection_items(
     :return: The payloads of the deleted items.
     :rtype: Dict[str, Any]
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
 
     ids = [info.id for info in image_infos]
 
@@ -206,8 +204,7 @@ async def get_or_create_collection(
     :return: The CollectionInfo object.
     :rtype: CollectionInfo
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
+
     try:
         collection = await client.get_collection(collection_name)
         sly.logger.debug("Collection %s already exists.", collection_name)
@@ -242,8 +239,7 @@ async def collection_exists(collection_name: str) -> bool:
     :return: True if the collection exists, False otherwise.
     :rtype: bool
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
+
     try:
         await client.get_collection(collection_name)
         return True
@@ -267,8 +263,7 @@ async def upsert(
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
+
     ids = [image_info.id for image_info in image_infos]
     payloads = create_payloads(image_infos)
     sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
@@ -298,8 +293,6 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
     :rtype: List[ImageInfoLite]
     """
     # Get specified ids from collection, compare updated_at and return ids that need to be updated.
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
 
     ids = [image_info.id for image_info in image_infos]
 
@@ -436,7 +429,7 @@ async def search(
 async def get_items(
     collection_name: str,
     limit: int = None,
-    batch_size: int = 10000, 
+    batch_size: int = 10000,
     with_vectors: bool = False,
 ) -> Tuple[List[ImageInfoLite], List[np.ndarray]]:
     """Returns specified number of items from the collection. If limit is not specified, returns all items.
@@ -475,9 +468,9 @@ async def get_items(
         total += len(points)
         if len(points) < current_batch_size:
             break  # No more points to fetch
-    
+
     all_points = all_points[:limit]
-    
+
     image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
 
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
@@ -536,10 +529,7 @@ async def get_item_payloads(collection_name: str, ids=List[str]) -> Dict[str, An
     :return: A dictionary with ID keys and payload values.
     :rtype: Dict[str, Any]
     """
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
 
-    #! check if need to batch request
     points = await client.retrieve(
         collection_name,
         ids,
@@ -574,8 +564,6 @@ async def update_payloads(
     if len(id_to_payload) == 0:
         return
 
-    if isinstance(collection_name, int):
-        collection_name = str(collection_name)
     await client.batch_update_points(
         collection_name,
         update_operations=[

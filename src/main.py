@@ -198,12 +198,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
 
-        collection_manager = ProjectCollectionManager(api, event.project_id)
+        if qdrant.collection_exists(event.project_id) is False:
+            message = f"Embeddings collection for project {event.project_id} does not exist. Please create embeddings first."
+            sly.logger.warning(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
-        # Collect project images info to use later for mapping.
-        image_infos = await image_get_list_async(api, event.project_id)
-        if image_infos is None or len(image_infos) == 0:
-            return JSONResponse({ResponseFields.MESSAGE: "Project is empty."})
+        collection_manager = ProjectCollectionManager(api, event.project_id)
 
         # -------------------- Step 2: Prepare Text Prompts And Image URLs For Search -------------------- #
 
@@ -220,10 +220,17 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         image_urls = []
         # If request contains image IDs, get image URLs to add to the query.
         if event.by_image_ids:
-            filtered_image_infos = [info for info in image_infos if info.id in event.by_image_ids]
+            image_infos = await image_get_list_async(
+                api, event.project_id, image_ids=event.by_image_ids
+            )
+            if image_infos is None or len(image_infos) == 0:
+                return JSONResponse(
+                    {ResponseFields.MESSAGE: "No images found for the provided IDs."}
+                )
+
             lite_image_infos = await create_lite_image_infos(
                 cas_size=g.IMAGE_SIZE_FOR_CAS,
-                image_infos=filtered_image_infos,
+                image_infos=image_infos,
             )
             sly.logger.debug(
                 "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",

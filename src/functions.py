@@ -145,7 +145,7 @@ async def update_embeddings(
             )
         else:
             images_to_delete = []
-   
+
     else:
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
@@ -162,13 +162,19 @@ async def auto_update_embeddings(
     """
     Update embeddings for the specified project if needed.
     """
+    project_message = f"[Project ID: {project_id}]"
+
     if project_info is None:
         project_info = await get_project_info(api, project_id)
 
+    if project_info is None:
+        logger.warning(f"{project_message} Info not found. Skipping embeddings update.")
+        return
+
     team_info: sly.TeamInfo = await get_team_info(api, project_info.team_id)
-    if team_info.usage.plan == "free":
-        logger.debug(
-            "Auto update embeddings is not available on free plan.",
+    if team_info.usage is not None and team_info.usage.plan == "free":
+        logger.info(
+            f"{project_message} Embeddings update is not available on free plan.",
             extra={
                 "project_id": project_id,
                 "project_name": project_info.name,
@@ -178,7 +184,7 @@ async def auto_update_embeddings(
         )
         api.project.disable_embeddings(project_id)
         logger.info(
-            "Embeddings are disabled for project %s (id: %d) due to free plan.",
+            f"{project_message} Embeddings are disabled for project due to free plan.",
             project_info.name,
             project_id,
         )
@@ -193,25 +199,17 @@ async def auto_update_embeddings(
         "items_count": project_info.items_count,
         "updated_at": project_info.updated_at,
         "embeddings_enabled": project_info.embeddings_enabled,
-        "is_embeddings_updated": project_info.is_embeddings_updated,
+        "embeddings_updated_at": project_info.embeddings_updated_at,
     }
     if not project_info.embeddings_enabled:
-        logger.debug("Embeddings are not activated for project %d.", project_id, extra=log_extra)
+        logger.debug(f"{project_message} Embeddings are not activated.", extra=log_extra)
         return
-    logger.debug(
-        "Auto update embeddings for project %s (id: %d).",
-        project_info.name,
-        project_id,
-        extra=log_extra,
-    )
+    logger.debug(f"{project_message} Auto update embeddings started.", extra=log_extra)
     t = time.monotonic()
     await update_embeddings(api, project_id, force=False, project_info=project_info)
     t = time.monotonic() - t
     logger.debug(
-        "Auto update embeddings for project %s (id: %d) finished. Time: %.3f sec.",
-        project_info.name,
-        project_id,
-        t,
+        f"{project_message} Auto update finished. Time: {t} seconds.",
         extra={**log_extra, "time": t},
     )
 
