@@ -93,14 +93,14 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         images_to_create = await image_get_list_async(
             api,
             event.project_id,
-            images_ids=event.image_ids,
+            image_ids=event.image_ids,
             wo_embeddings=True,
         )
         if project_info.embeddings_updated_at is not None:
             images_to_delete = await image_get_list_async(
                 api,
                 event.project_id,
-                images_ids=event.image_ids,
+                image_ids=event.image_ids,
                 deleted_after=project_info.embeddings_updated_at,
             )
         else:

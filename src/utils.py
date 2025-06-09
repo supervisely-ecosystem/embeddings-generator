@@ -597,7 +597,7 @@ async def image_get_list_async(
     api: sly.Api,
     project_id: int,
     dataset_id: int = None,
-    images_ids: List[int] = None,
+    image_ids: List[int] = None,
     per_page: int = 500,
     # with_embeddings_updated_at: bool = True,
     wo_embeddings: Optional[bool] = False,
@@ -663,12 +663,12 @@ async def image_get_list_async(
 
             return batch_items
 
-    if images_ids is None:
+    if image_ids is None:
         # If no image IDs specified, get all images
         tasks.append(asyncio.create_task(_get_all_pages([])))
     else:
         # Process image IDs in batches of 50
-        for batch in batched(images_ids):
+        for batch in batched(image_ids):
             batch_filters = [{"field": ApiField.ID, "operator": "in", "value": batch}]
             tasks.append(asyncio.create_task(_get_all_pages(batch_filters)))
             await asyncio.sleep(0.02)  # Small delay to avoid overwhelming the server
