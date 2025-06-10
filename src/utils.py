@@ -599,18 +599,42 @@ async def image_get_list_async(
     dataset_id: int = None,
     image_ids: List[int] = None,
     per_page: int = 500,
-    # with_embeddings_updated_at: bool = True,
     wo_embeddings: Optional[bool] = False,
     deleted_after: Optional[str] = None,
 ) -> List[sly.ImageInfo]:
+    """
+    Get list of images from the project or dataset.
+     - If `image_ids` is provided, it will return only those images.
+     - If `dataset_id` is provided, it will return images from that dataset.
+     - If neither `dataset_id` nor `image_ids` is provided, it will return all images from the project.
+     - If `wo_embeddings` is True, it will return only images without embeddings.
+     - If `deleted_after` is provided, it will return only images that were updated after that date.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param project_id: ID of the project to get images from.
+    :type project_id: int
+    :param dataset_id: ID of the dataset to get images from. If None, will get images from the whole project.
+    :type dataset_id: int, optional
+    :param image_ids: List of image IDs to get images from. If None, will get all images.
+    :type image_ids: List[int], optional
+    :param per_page: Number of images to return per page. Default is 500.
+    :type per_page: int
+    :param wo_embeddings: If True, will return only images without embeddings. Default is False.
+    :type wo_embeddings: bool, optional
+    :param deleted_after: If provided, will return only images that were updated after this date.
+    :type deleted_after: str, optional
+    :return: List of images from the project or dataset.
+    :rtype: List[sly.ImageInfo]
+    :raises ValueError: If both `wo_embeddings` and `deleted_after` are set to True.
+    """
     method = "images.list"
     base_data = {
         ApiField.PROJECT_ID: project_id,
         ApiField.FORCE_METADATA_FOR_LINKS: False,
         ApiField.PER_PAGE: per_page,
     }
-    # if with_embeddings_updated_at:
-    #     base_data[ApiField.EXTRA_FIELDS] = [ApiField.EMBEDDINGS_UPDATED_AT]
+
     if dataset_id is not None:
         base_data[ApiField.DATASET_ID] = dataset_id
 
@@ -628,10 +652,12 @@ async def image_get_list_async(
     all_items = []
     tasks = []
 
-    async def _get_all_pages(batch_filters: List[Dict]):
+    async def _get_all_pages(ids_filter: List[Dict]):
         page_data = base_data.copy()
-        if batch_filters:
-            page_data[ApiField.FILTER].extend(batch_filters)
+        if ids_filter:
+            if ApiField.FILTER not in page_data:
+                page_data[ApiField.FILTER] = []
+            page_data[ApiField.FILTER].extend(ids_filter)
         page_data[ApiField.PAGE] = 1
 
         async with semaphore:
@@ -650,9 +676,9 @@ async def image_get_list_async(
             page_tasks = []
             if pages_count > 1:
                 for page in range(2, pages_count + 1):
-                    page_data = page_data.copy()
-                    page_data[ApiField.PAGE] = page
-                    page_tasks.append(api.post_async(method, page_data))
+                    page_data_copy = page_data.copy()
+                    page_data_copy[ApiField.PAGE] = page
+                    page_tasks.append(api.post_async(method, page_data_copy))
 
                 responses = await asyncio.gather(*page_tasks)
                 for resp in responses:
@@ -669,8 +695,10 @@ async def image_get_list_async(
     else:
         # Process image IDs in batches of 50
         for batch in batched(image_ids):
-            batch_filters = [{"field": ApiField.ID, "operator": "in", "value": batch}]
-            tasks.append(asyncio.create_task(_get_all_pages(batch_filters)))
+            ids_filter = [
+                {ApiField.FIELD: ApiField.ID, ApiField.OPERATOR: "in", ApiField.VALUE: batch}
+            ]
+            tasks.append(asyncio.create_task(_get_all_pages(ids_filter)))
             await asyncio.sleep(0.02)  # Small delay to avoid overwhelming the server
 
     # Wait for all tasks to complete
