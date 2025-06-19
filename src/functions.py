@@ -52,58 +52,60 @@ async def process_images(
     :rtype: Tuple[List[sly.ImageInfo], List[List[float]]]
     """
 
-    collection_msg = f"[Collection: {project_id}]"
+    msg_prefix = f"[Project ID: {project_id}]"
+    vectors = []
+
+    if len(to_create) == 0 and len(to_delete) == 0:
+        logger.debug(f"{msg_prefix} Embeddings are up-to-date.")
+        return to_create, vectors
 
     to_create = await create_lite_image_infos(
         cas_size=g.IMAGE_SIZE_FOR_CAS,
         image_infos=to_create,
     )
 
-    if len(to_create) == 0 and len(to_delete) == 0:
-        logger.debug(f"{collection_msg} All images are up-to-date.")
-        return to_create
     # if await qdrant.collection_exists(project_id):
     # Get diff of image infos, check if they are already in the Qdrant collection
-    # to_create = await qdrant.get_diff(collection_name=project_id, image_infos=to_create)
-    # else:
+
     if check_collection_exists:
         await qdrant.get_or_create_collection(project_id)
-    # to_create = []
 
     current_progress = 0
     total_progress = len(to_create)
 
-    # to_create = []
-    vectors = []
     if len(to_create) > 0:
-        logger.debug(f"{collection_msg} Images to be vectorized: {total_progress}.")
+        logger.debug(f"{msg_prefix} Images to be vectorized: {total_progress}.")
         for image_batch in sly.batched(to_create):
             # Get vectors from images.
             vectors_batch = await cas.get_vectors(
                 [image_info.cas_url for image_info in image_batch]
             )
             vectors_batch = fix_vectors(vectors_batch)
-            logger.debug(f"{collection_msg} Got {len(vectors_batch)} vectors for images.")
+            logger.debug(f"{msg_prefix} Got {len(vectors_batch)} vectors for images.")
 
             # Upsert vectors to Qdrant.
             await qdrant.upsert(project_id, vectors_batch, image_batch)
             current_progress += len(image_batch)
             logger.debug(
-                f"{collection_msg} Upserted {len(vectors_batch)} vectors to Qdrant. [{current_progress}/{total_progress}]",
+                f"{msg_prefix} Upserted {len(vectors_batch)} vectors to Qdrant. [{current_progress}/{total_progress}]",
             )
             await set_image_embeddings_updated_at(api, image_batch)
 
             if return_vectors:
                 vectors.extend(vectors_batch)
 
-        logger.debug(f"{collection_msg} All {total_progress} images have been vectorized.")
+        logger.debug(f"{msg_prefix} All {total_progress} images have been vectorized.")
 
-    for image_batch in sly.batched(to_delete):
-        # Delete images from the Qdrant.
-        await qdrant.delete_collection_items(collection_name=project_id, image_infos=image_batch)
-        await set_image_embeddings_updated_at(api, image_batch, [None * len(image_batch)])
-        logger.debug(f"{collection_msg} Deleted {len(image_batch)} images from Qdrant.")
-
+    if len(to_delete) > 0:
+        logger.debug(f"{msg_prefix} Vectors for images to be deleted: {len(to_delete)}.")
+        for image_batch in sly.batched(to_delete):
+            # Delete images from the Qdrant.
+            await qdrant.delete_collection_items(
+                collection_name=project_id, image_infos=image_batch
+            )
+            await set_image_embeddings_updated_at(api, image_batch, [None] * len(image_batch))
+            logger.debug(f"{msg_prefix} Deleted {len(image_batch)} images from Qdrant.")
+    logger.info(f"{msg_prefix} Embeddings Created: {len(to_create)}, Deleted: {len(to_delete)}.")
     return to_create, vectors
 
 
@@ -154,77 +156,3 @@ async def update_embeddings(
         await set_image_embeddings_updated_at(api, image_infos)
         await set_project_embeddings_updated_at(api, project_id)
 
-
-@timeit
-async def auto_update_embeddings(
-    api: sly.Api, project_id: int, project_info: Optional[sly.ProjectInfo] = None
-):
-    """
-    Update embeddings for the specified project if needed.
-    """
-    project_message = f"[Project ID: {project_id}]"
-
-    if project_info is None:
-        project_info = await get_project_info(api, project_id)
-
-    if project_info is None:
-        logger.warning(f"{project_message} Info not found. Skipping embeddings update.")
-        return
-
-    team_info: sly.TeamInfo = await get_team_info(api, project_info.team_id)
-    if team_info.usage is not None and team_info.usage.plan == "free":
-        logger.info(
-            f"{project_message} Embeddings update is not available on free plan.",
-            extra={
-                "project_id": project_id,
-                "project_name": project_info.name,
-                "team_id": team_info.id,
-                "team_name": team_info.name,
-            },
-        )
-        api.project.disable_embeddings(project_id)
-        logger.info(
-            f"{project_message} Embeddings are disabled for project due to free plan.",
-            project_info.name,
-            project_id,
-        )
-        return
-
-    # Check if embeddings activated for the project
-    log_extra = {
-        "team_id": project_info.team_id,
-        "workspace_id": project_info.workspace_id,
-        "project_name": project_info.name,
-        "project_id": project_id,
-        "items_count": project_info.items_count,
-        "updated_at": project_info.updated_at,
-        "embeddings_enabled": project_info.embeddings_enabled,
-        "embeddings_updated_at": project_info.embeddings_updated_at,
-    }
-    if not project_info.embeddings_enabled:
-        logger.debug(f"{project_message} Embeddings are not activated.", extra=log_extra)
-        return
-    logger.debug(f"{project_message} Auto update embeddings started.", extra=log_extra)
-    t = time.monotonic()
-    await update_embeddings(api, project_id, force=False, project_info=project_info)
-    t = time.monotonic() - t
-    logger.debug(
-        f"{project_message} Auto update finished. Time: {t} seconds.",
-        extra={**log_extra, "time": t},
-    )
-
-
-@timeit
-async def auto_update_all_embeddings():
-    """Update embeddings for all available projects"""
-    logger.info("Auto update all embeddings task started.")
-    # collection_names = await qdrant.get_collection_names()
-    # project_ids = [int(name) for name in collection_names]
-    project_infos: List[sly.ProjectInfo] = await get_all_projects(g.api)
-    for project_info in project_infos:
-        await auto_update_embeddings(
-            g.api,
-            project_info.id,
-            project_info=project_info,
-        )
-    logger.info("Auto update all embeddings task finished.")

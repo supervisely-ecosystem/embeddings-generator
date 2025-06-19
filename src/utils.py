@@ -3,6 +3,7 @@ import base64
 import datetime
 import hashlib
 import json
+import random
 import uuid
 from dataclasses import dataclass
 from functools import partial, wraps
@@ -11,7 +12,8 @@ from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
 
@@ -998,3 +1000,29 @@ def link_to_uuid(image_link: str) -> uuid.UUID:
     # Create a deterministic UUID based on the image link using uuid5 with a namespace
     # Using URL namespace for links
     return uuid.uuid5(uuid.NAMESPACE_URL, image_link)
+
+
+@with_retries()
+@to_thread
+def start_projections_service(
+    api: sly.Api, team_id: int, workspace_id: int, slug: str = "projections-service"
+):
+    #! replace with projections service slug when available
+    module_info = api.app.get_ecosystem_module_info(
+        slug="supervisely-ecosystem/while-true-script-v2"
+    )
+    session = api.app.start(agent_id=None, module_id=module_info.id, workspace_id=workspace_id)
+    try:
+        api.app.wait(session.task_id, target_status=api.task.Status.STARTED)
+    except Exception as e:
+        sly.logger.error("Failed to start app", exc_info=e)
+        return
+    ready = api.app.wait_until_ready_for_api_calls(session.task_id)
+    return session.task_id
+
+
+@with_retries()
+@to_thread
+def stop_projections_service(api: sly.Api, task_id: int):
+    status = api.task.stop(task_id)
+    return status

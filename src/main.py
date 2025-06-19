@@ -13,7 +13,7 @@ import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.events import Event
-from src.functions import auto_update_all_embeddings, process_images, update_embeddings
+from src.functions import process_images, update_embeddings
 from src.pointcloud import upload as upload_pcd
 
 # from src.search_cache import CollectionItem, SearchCache
@@ -33,6 +33,8 @@ from src.utils import (
     send_request,
     set_embeddings_in_progress,
     set_project_embeddings_updated_at,
+    start_projections_service,
+    stop_projections_service,
     timeit,
 )
 from src.visualization import (
@@ -379,8 +381,19 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     elif event.clustering_method == ClusteringMethods.DBSCAN:
         data["settings"] = {"clustering_method": event.clustering_method}
 
-    # --------------- Step 3: Send Request To Projections Service And Return The Result -------------- #
+    # -------------------------------- Step 3: Run Projections Service ------------------------------- #
+    try:
+        g.projections_service_task_id = await start_projections_service(
+            api, team_id=g.team_id, workspace_id=g.workspace_id
+        )
+    except Exception as e:
+        sly.logger.error(f"Failed to start projections service: {str(e)}", exc_info=True)
+        return JSONResponse(
+            {ResponseFields.MESSAGE: f"Failed to start projections service: {str(e)}"},
+            status_code=500,
+        )
 
+    # --------------- Step 4: Send Request To Projections Service And Return The Result -------------- #
     samples = await send_request(
         api, task_id=g.projections_service_task_id, method="diverse", data=data
     )
@@ -396,6 +409,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     collection_manager = ProjectCollectionManager(api, event.project_id)
     collection_id = await collection_manager.save(result)
+    await stop_projections_service(api, g.projections_service_task_id)
     return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
 
 
@@ -562,26 +576,3 @@ async def check_task_status(request: Request):
         return JSONResponse(
             {ResponseFields.STATUS: ResponseStatus.ERROR, ResponseFields.MESSAGE: str(e)}
         )
-
-
-scheduler = AsyncIOScheduler(
-    job_defaults={
-        "misfire_grace_time": 120,  # Allow jobs to be 2 minutes late
-        "coalesce": True,  # Combine missed runs into a single run
-    }
-)
-scheduler.add_job(
-    run_safe,
-    args=[auto_update_all_embeddings],
-    trigger="interval",
-    minutes=g.UPDATE_EMBEDDINGS_INTERVAL,
-    max_instances=1,  # Prevent overlapping job instances
-)
-
-
-@server.on_event("startup")
-def on_startup():
-    scheduler.start()
-
-
-app.call_before_shutdown(scheduler.shutdown)
