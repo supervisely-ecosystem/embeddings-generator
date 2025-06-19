@@ -190,9 +190,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             f"Searching for similar images in project {event.project_id}",
             extra={
                 "prompt": event.prompt,
-                "by_image_ids": event.by_image_ids,
+                "by_image_ids": event.by_image_ids, # If True, search will be performed by image IDs.
                 "limit": event.limit,
-                "image_ids": event.image_ids,
+                "image_ids": event.image_ids, # Image IDs to filter the search results.
                 "dataset_id": event.dataset_id,
                 "threshold": event.threshold,
             },
