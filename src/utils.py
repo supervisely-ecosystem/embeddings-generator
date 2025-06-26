@@ -1019,7 +1019,7 @@ def start_projections_service(
     if len(sessions) == 0:
         sly.logger.debug("Not found projections service session for current user, starting new one")
         try:
-            session = api.app.start(agent_id=None, module_id=module_info.id, workspace_id=workspace_id)
+            session = api.app.start(agent_id=None, module_id=module_info.id, workspace_id=workspace_id, params={})
             api.app.wait(session.task_id, target_status=api.task.Status.STARTED)
         except Exception as e:
             sly.logger.error("Failed to start app", exc_info=e)
