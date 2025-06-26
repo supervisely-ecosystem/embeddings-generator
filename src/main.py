@@ -390,7 +390,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     # -------------------------------- Step 3: Run Projections Service ------------------------------- #
     try:
-        g.projections_service_task_id = await start_projections_service(
+        projections_service_task_id = await start_projections_service(
             api, team_id=g.team_id, workspace_id=g.workspace_id
         )
     except Exception as e:
@@ -402,7 +402,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     # --------------- Step 4: Send Request To Projections Service And Return The Result -------------- #
     samples = await send_request(
-        api, task_id=g.projections_service_task_id, method="diverse", data=data
+        api, task_id=projections_service_task_id, method="diverse", data=data
     )
     result = []
     sly.logger.debug("Generated diverse samples: %s", samples)
@@ -416,7 +416,10 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     collection_manager = ProjectCollectionManager(api, event.project_id)
     collection_id = await collection_manager.save(result)
-    await stop_projections_service(api, g.projections_service_task_id)
+
+    # * commented out because the projections service will be stopped by its own scheduler
+    # await stop_projections_service(api, projections_service_task_id) 
+
     return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
 
 

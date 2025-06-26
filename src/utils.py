@@ -1005,18 +1005,27 @@ def link_to_uuid(image_link: str) -> uuid.UUID:
 @with_retries()
 @to_thread
 def start_projections_service(
-    api: sly.Api, team_id: int, workspace_id: int, slug: str = "projections-service"
+    api: sly.Api, team_id: int, workspace_id: int
 ):
     #! replace with projections service slug when available
     module_info = api.app.get_ecosystem_module_info(
-        slug="supervisely-ecosystem/while-true-script-v2"
+        slug="546804b13d9ed54a9105b9f850c14d14/projections-service"
     )
-    session = api.app.start(agent_id=None, module_id=module_info.id, workspace_id=workspace_id)
-    try:
-        api.app.wait(session.task_id, target_status=api.task.Status.STARTED)
-    except Exception as e:
-        sly.logger.error("Failed to start app", exc_info=e)
-        return
+    sessions = api.app.get_sessions(
+        team_id, module_info.id, statuses=[api.task.Status.STARTED]
+    )
+    me = api.user.get_my_info()
+    sessions = [s for s in sessions if s.user_id == me.id]
+    if len(sessions) == 0:
+        sly.logger.debug("Not found projections service session for current user, starting new one")
+        try:
+            session = api.app.start(agent_id=None, module_id=module_info.id, workspace_id=workspace_id)
+            api.app.wait(session.task_id, target_status=api.task.Status.STARTED)
+        except Exception as e:
+            sly.logger.error("Failed to start app", exc_info=e)
+            return
+    else:
+        session = sessions[0]
     ready = api.app.wait_until_ready_for_api_calls(session.task_id)
     return session.task_id
 
