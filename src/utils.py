@@ -1004,13 +1004,14 @@ def link_to_uuid(image_link: str) -> uuid.UUID:
 
 @with_retries()
 @to_thread
-def start_projections_service(
-    api: sly.Api, team_id: int, workspace_id: int
-):
+def start_projections_service(api: sly.Api, project_id: int):
     #! replace with projections service slug when available
     module_info = api.app.get_ecosystem_module_info(
         slug="546804b13d9ed54a9105b9f850c14d14/projections-service"
     )
+    project = api.project.get_info_by_id(project_id)
+    team_id = project.team_id
+    workspace_id = project.workspace_id
     sessions = api.app.get_sessions(
         team_id, module_info.id, statuses=[api.task.Status.STARTED]
     )

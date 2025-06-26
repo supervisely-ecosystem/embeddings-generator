@@ -390,9 +390,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     # -------------------------------- Step 3: Run Projections Service ------------------------------- #
     try:
-        projections_service_task_id = await start_projections_service(
-            api, team_id=g.team_id, workspace_id=g.workspace_id
-        )
+        projections_service_task_id = await start_projections_service(api, event.project_id)
     except Exception as e:
         sly.logger.error(f"Failed to start projections service: {str(e)}", exc_info=True)
         return JSONResponse(
