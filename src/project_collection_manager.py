@@ -8,14 +8,12 @@ from src.utils import ImageInfoLite, generate_key, to_thread
 
 class ProjectCollectionManager:
     """
-    A cache for search results that can be persisted to storage.
-
-    This class provides functionality to cache search results
-    and check if cached results are still valid based on project update timestamps.
-    The cache is automatically saved to storage when updated and loaded when initialized.
+    Manager for Supervisely Entities Collection associated with AI Search or Diversity Search.
+    This class handles the creation, saving, checking, and removal of collections
+    that cache search results for a specific project.
     """
 
-    SYSTEM_NAME_PREFIX = "AI Search Collection: "
+    SYSTEM_NAME_PREFIX = ""
 
     def __init__(self, api: sly.Api, project_id: int):
         """
@@ -100,3 +98,20 @@ class ProjectCollectionManager:
                     f"Failed to remove collection {collection.name} ({collection.id})"
                     f" in project {project_id}: {e}"
                 )
+
+
+class AiSearchCollectionManager(ProjectCollectionManager):
+    """
+    Manager for Supervisely Entities Collection associated with AI Search.
+    This class handles the creation, saving, checking, and removal of collections
+    that cache search results for a specific project.
+    """
+    SYSTEM_NAME_PREFIX = "AI Search Collection: "
+
+class DiverseCollectionManager(ProjectCollectionManager):
+    """
+    Manager for Supervisely Entities Collection associated with Diversity Search.
+    This class handles the creation, saving, checking, and removal of collections
+    that cache search results for a specific project.
+    """
+    SYSTEM_NAME_PREFIX = "Diverse Collection: "

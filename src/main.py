@@ -17,7 +17,7 @@ from src.functions import process_images, update_embeddings
 from src.pointcloud import upload as upload_pcd
 
 # from src.search_cache import CollectionItem, SearchCache
-from src.project_collection_manager import ProjectCollectionManager
+from src.project_collection_manager import AiSearchCollectionManager, DiverseCollectionManager
 from src.utils import (
     ClusteringMethods,
     ImageInfoLite,
@@ -210,7 +210,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             sly.logger.warning(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
-        collection_manager = ProjectCollectionManager(api, event.project_id)
+        collection_manager = AiSearchCollectionManager(api, event.project_id)
 
         # -------------------- Step 2: Prepare Text Prompts And Image URLs For Search -------------------- #
 
@@ -412,7 +412,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     if len(result) == 0:
         return JSONResponse({ResponseFields.MESSAGE: "No diverse images found."})
 
-    collection_manager = ProjectCollectionManager(api, event.project_id)
+    collection_manager = DiverseCollectionManager(api, event.project_id)
     collection_id = await collection_manager.save(result)
 
     # * commented out because the projections service will be stopped by its own scheduler
