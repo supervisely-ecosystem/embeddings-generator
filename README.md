@@ -84,14 +84,14 @@ After configuration, click "Run" to deploy the service. The application will sta
 
 For each project, you want to use the AI Search feature you need to enable this feature:
 
-|  |   |
-|-------------------------|-------------------------|
+|                                                                                                                            |                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | ![Enable AI Search 1](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/enable_1.jpg) | ![Enable AI Search 2](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/enable_2.jpg) |
 
 After enabling the AI Search feature, embeddings will be generated automatically for all images in the project, it may take some time depending on the number of images.
 
-| |  |
-|-----------------------------|-----------------------------|
+|                                                                                                                                   |                                                                                                                                   |
+| --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | ![Preparing Embeddings 1](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/preparing_1.jpg) | ![Preparing Embeddings 2](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/preparing_2.jpg) |
 
 Once embeddings are generated, you can use the semantic search and diverse selection features:
@@ -104,6 +104,8 @@ Once embeddings are generated, you can use the semantic search and diverse selec
 
 - Use reference images to find visually similar images:
 
+| Select Reference Images                                                                                                      | Results                                                                                                                      |
+| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | ![Reference Image 1](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/reference_1.jpg) | ![Reference Image 2](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/reference_2.jpg) |
 
 When results are returned, you can see the confidence scores for each image, indicating how similar they are to the search query. You can adjust the slider to filter results based on confidence:
