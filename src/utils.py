@@ -1025,8 +1025,6 @@ def start_projections_service(api: sly.Api, project_id: int):
                 module_id=module_info.id,
                 workspace_id=workspace_id,
                 params={}, # ! TODO: remove after sly SDK release
-                app_version="test", # ! TODO: remove after Projections Service release
-                is_branch=True, # ! TODO: remove after Projections Service release
             )
             api.app.wait(session.task_id, target_status=api.task.Status.STARTED)
         except Exception as e:
