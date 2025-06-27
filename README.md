@@ -29,31 +29,20 @@ Embeddings Generator is a headless Supervisely microservice that provides high-p
 
 The service operates as a background microservice and integrates seamlessly with Supervisely ecosystem, providing RESTful API endpoints for embeddings generation, semantic search, and advanced image analysis workflows.
 
-### Key Benefits
+### Key Features
 
-- **Automated Embeddings**: Generates high-quality CLIP embeddings for all project images automatically
-- **Semantic Search**: Enables text-to-image and image-to-image similarity search capabilities
-- **Vector Storage**: Efficiently stores and manages embeddings in Qdrant vector database
-- **Diverse Selection**: Provides intelligent image diversity algorithms for dataset curation
-- **RESTful API**: Simple HTTP API for integration with external systems and workflows
-- **Background Processing**: Runs as a headless service with automatic progress tracking
+- **Text-to-Image Search**: Find images using natural language descriptions.
+- **Image-to-Image Search**: Discover visually similar images in your dataset.
+- **Hybrid Search**: Combine text prompts and reference images for precise results.
+- **Diverse Selection**: Use clustering algorithms to select diverse image subsets.
 
-## Features
+### Core Technologies
 
-### Core Functionality
-
-- **CLIP Embeddings Generation**: Uses state-of-the-art CLIP models via CLIP as Service
-- **Vector Database Integration**: Stores embeddings in Qdrant for high-performance retrieval
-- **Incremental Updates**: Only processes new or modified images to optimize performance
-- **Batch Processing**: Efficiently handles large datasets with intelligent batching
-- **Progress Tracking**: Real-time monitoring of embeddings generation progress
-
-### Search & Analysis
-
-- **Text-to-Image Search**: Find images using natural language descriptions
-- **Image-to-Image Search**: Discover visually similar images in your dataset
-- **Hybrid Search**: Combine text prompts and reference images for precise results
-- **Diverse Selection**: Advanced algorithms for selecting diverse image subsets
+- **CLIP as Service**: Utilizes state-of-the-art CLIP models for generating high-quality image embeddings.
+- **Qdrant Vector Database**: Efficiently stores and manages embeddings for high-performance retrieval.
+- **Supervisely Ecosystem**: Integrates with Supervisely platform for seamless project management
+- **RESTful API**: Provides simple HTTP endpoints for easy integration with external systems and workflows.
+- **Background Processing**: Runs as a headless service with automatic updating of embeddings as new images are added to projects.
 
 ## How To Run
 
@@ -62,23 +51,17 @@ The service operates as a background microservice and integrates seamlessly with
 - Supervisely instance with admin access
 - Running CLIP as Service instance (task ID)
 - Qdrant vector database instance (URL)
-- Project with labeled images
+- Recommended: Run the Embeddings Auto-Updater app to keep embeddings up-to-date automatically.
 
-**Step 1: Deploy Required Services**
-
-1. **Deploy CLIP Service**: Launch a CLIP Service app in your Supervisely ecosystem
-2. **Setup Qdrant Database**: Get a URL for your Qdrant database instance (e.g., `https://qdrant-<your-server-address>:443`)
-3. **Run Embeddings Auto-Updater**: Using CLIP Service Task ID and Qdrant URL, deploy the Embeddings Auto-Updater app to keep embeddings up-to-date automatically ⚡
-
-**Step 2: Launch Embeddings Generator**
-
-When launching the application, configure these settings in the modal dialog:
+When launching the service, configure these settings in the modal dialog:
 
 1. **Qdrant DB**: Full URL including protocol (https/http) and port.
 2. **CLIP Service**: Task ID for CLIP as Service session.
-3. **Change App availability** to "Whole Instance" to make it accessible for all projects.
+3. **Change App availability** to "Whole Instance" to make it accessible for all projects. If you forget to do this, you can change it later in the app session settings.
 
 After configuration, click "Run" to deploy the service. The application will start in headless mode and will be available for all projects in your Supervisely instance.
+
+![How To Run](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/how_to_run.jpg)
 
 ## How To Use
 
