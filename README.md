@@ -93,9 +93,9 @@ Once embeddings are generated, you can use the semantic search and diverse selec
 
 When results are returned, you can see the confidence scores for each image, indicating how similar they are to the search query. You can adjust the slider to filter results based on confidence:
 
-<video  style="display:block; width:100%; height:auto;" autoplay controls loop="loop">
-    <source src="https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/confidence.mp4" type="video/mp4" />
-</video>
+<div>
+<video autoplay loop="loop" controls width="100%" src="https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/confidence.mp4"></video>
+</div>
 
 **Diverse Selection**
 
