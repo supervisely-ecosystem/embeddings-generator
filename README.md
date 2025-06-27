@@ -8,11 +8,9 @@
 
 <p align="center">
   <a href="#Overview">Overview</a> •
-  <a href="#Features">Features</a> •
-  <a href="#API-Endpoints">API Endpoints</a> •
-  <a href="#How-To-Run">How To Run</a> •
-  <a href="#Configuration">Configuration</a> •
-  <a href="#Technical-Details">Technical Details</a>
+    <a href="#How-To-Run">How To Run</a> •
+    <a href="#How-To-Use">How To Use</a> •
+    <a href="#API-Endpoints">API Endpoints</a> •
 </p>
 
 [![](https://img.shields.io/badge/supervisely-ecosystem-brightgreen)](https://ecosystem.supervisely.com/apps/supervisely-ecosystem/embeddings-generator)
