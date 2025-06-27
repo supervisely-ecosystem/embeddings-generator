@@ -8,7 +8,7 @@
 		"casHost": ""
 	},
 	"description": "Microservice for generating embeddings using Clip as Service and saving them to Qdrant",
-	"categories": ["system"],
+	"categories": ["system", "ai search"],
 	"icon": "https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/icon.jpg",
 	"icon_cover": true,
 	"poster": "https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/poster.jpg",
