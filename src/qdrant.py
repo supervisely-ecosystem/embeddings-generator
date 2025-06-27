@@ -1,41 +1,191 @@
-from math import sqrt
-from random import choice
-from typing import Any, Dict, List, Literal, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 import numpy as np
 import supervisely as sly
-from pympler import asizeof
+from fastapi.responses import JSONResponse
 from qdrant_client import AsyncQdrantClient, QdrantClient
+from qdrant_client.conversions import common_types as types
+from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.models import Batch, CollectionInfo, Distance, VectorParams
-from sklearn.cluster import KMeans
+from qdrant_client.http.models import PointStruct, UpdateStatus
+from qdrant_client.models import (
+    Batch,
+    CollectionInfo,
+    Distance,
+    OverwritePayloadOperation,
+    SetPayload,
+    VectorParams,
+)
 
 import src.globals as g
-from src.utils import ImageInfoLite, QdrantFields, TupleFields, timeit, with_retries
+from src.utils import (
+    ImageInfoLite,
+    QdrantFields,
+    ResponseFields,
+    TupleFields,
+    parse_timestamp,
+    timeit,
+    with_retries,
+)
 
-client = AsyncQdrantClient(g.qdrant_host)
+
+def create_client_from_url(url: str) -> AsyncQdrantClient:
+    """Create a Qdrant client instance from URL.
+
+    Args:
+        url: The Qdrant service URL in format http(s)://<host>[:port]
+
+    Returns:
+        AsyncQdrantClient: Configured client instance
+    """
+    parsed_host = urlparse(url)
+
+    # Validate URL format
+    if parsed_host.scheme not in ["http", "https"]:
+        raise ValueError(f"Qdrant host should be in format http(s)://<host>[:port], got {url}")
+
+    # Create client with appropriate settings based on URL
+    return AsyncQdrantClient(
+        url=parsed_host.hostname,
+        https=parsed_host.scheme == "https",
+        port=parsed_host.port or 6333,  # Default Qdrant port
+    )
+
+
+client = create_client_from_url(g.qdrant_host)
+
 
 try:
     sly.logger.info(f"Connecting to Qdrant at {g.qdrant_host}...")
     QdrantClient(g.qdrant_host).get_collections()
     sly.logger.info(f"Connected to Qdrant at {g.qdrant_host}")
 except Exception as e:
-    sly.logger.error(f"Failed to connect to Qdrant at {g.qdrant_host} with error: {e}")
+    sly.logger.error(f"Failed to connect to Qdrant at {g.qdrant_host}: {e}")
+
+
+# IMAGES_COLLECTION = "images"
+IMAGES_COLLECTION = "images-test"
+
+
+class SearchResultField:
+    ITEMS = "items"
+    VECTORS = "vectors"
+    SCORES = "scores"
+
+
+class ImageReferences:
+    IMAGE_IDS = "image_ids"
+    PROJECT_IDS = "project_ids"
+    DATASET_IDS = "dataset_ids"
+
+    def __init__(self, payload: Dict[str, Any]):
+        self.image_ids = payload.get(self.IMAGE_IDS, [])
+        self.project_ids = payload.get(self.PROJECT_IDS, [])
+        self.dataset_ids = payload.get(self.DATASET_IDS, [])
+
+    def update(
+        self,
+        image_ids: Optional[List[int]] = None,
+        project_ids: Optional[List[int]] = None,
+        dataset_ids: Optional[List[int]] = None,
+    ):
+        """Update the references with new values.
+
+        :param image_id: Image IDs to add.
+        :type image_id: Optional[List[int]], optional
+        :param project_id: Project IDs to add.
+        :type project_id: Optional[List[int]], optional
+        :param dataset_id: Dataset IDs to add.
+        :type dataset_id: Optional[List[int]], optional
+        """
+        if image_ids is None:
+            image_ids = []
+        if project_ids is None:
+            project_ids = []
+        if dataset_ids is None:
+            dataset_ids = []
+        self.image_ids.extend(image_ids)
+        self.project_ids.extend(project_ids)
+        self.dataset_ids.extend(dataset_ids)
+        self.image_ids = list(set(self.image_ids))
+        self.project_ids = list(set(self.project_ids))
+        self.dataset_ids = list(set(self.dataset_ids))
+
+    @classmethod
+    def clear_payload(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Clear the payload from references.
+
+        :param payload: Payload to clear.
+        :type payload: Dict[str, Any]
+        :return: Cleared payload.
+        :rtype: Dict[str, Any]
+        """
+        for field in [cls.IMAGE_IDS, cls.PROJECT_IDS, cls.DATASET_IDS]:
+            if field in payload:
+                del payload[field]
+        return payload
+
+
+def get_search_filter(
+    dataset_id: Optional[int] = None,
+    image_ids: Optional[List[int]] = None,
+):
+    """Get search filter for Qdrant collection.
+
+    :param dataset_id: Dataset ID to filter by.
+    :type dataset_id: Optional[int], optional
+    :param image_ids: List of image IDs to filter by.
+    :type image_ids: Optional[List[int]], optional
+    :return: Filter for Qdrant collection.
+    :rtype: dict
+    """
+
+    filter = None
+    if image_ids:
+        filter = models.Filter(
+            must=[
+                models.HasIdCondition(has_id=image_ids),
+            ],
+        )
+    elif dataset_id:
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key=QdrantFields.DATASET_ID,
+                    match=models.MatchAny(any=[dataset_id]),
+                ),
+            ],
+        )
+
+    return filter
 
 
 @with_retries()
-async def delete_collection(collection_name: str) -> None:
-    """Delete a collection with the specified name.
+async def delete_collection_items(
+    collection_name: str,
+    image_infos: List[sly.ImageInfo],
+) -> Dict[str, Any]:
+    """Delete a collection items with the specified IDs.
 
-    :param collection_name: The name of the collection to delete.
+    :param collection_name: The name of the collection to delete items from
     :type collection_name: str
+    :param image_infos: A list of ImageInfo objects to delete.
+    :type image_infos: List[ImageInfo]
+    :return: The payloads of the deleted items.
+    :rtype: Dict[str, Any]
     """
-    sly.logger.debug(f"Deleting collection {collection_name}...")
+
+    ids = [info.id for info in image_infos]
+
+    sly.logger.debug(f"[Collection: {collection_name}] Deleting items from collection %s...", ids)
     try:
-        await client.delete_collection(collection_name)
-        sly.logger.debug(f"Collection {collection_name} deleted.")
+        await client.delete(collection_name, ids, wait=False)
     except UnexpectedResponse:
-        sly.logger.debug(f"Collection {collection_name} wasn't found while deleting.")
+        sly.logger.debug(
+            f"[Collection: {collection_name}] Something went wrong, while deleting {ids}."
+        )
 
 
 @with_retries()
@@ -54,43 +204,47 @@ async def get_or_create_collection(
     :return: The CollectionInfo object.
     :rtype: CollectionInfo
     """
+
     try:
         collection = await client.get_collection(collection_name)
-        sly.logger.debug(f"Collection {collection_name} already exists.")
+        sly.logger.debug("Collection %s already exists.", collection_name)
     except UnexpectedResponse:
         await client.create_collection(
             collection_name,
             vectors_config=VectorParams(size=size, distance=distance),
         )
-        sly.logger.debug(f"Collection {collection_name} created.")
+        sly.logger.debug("Collection %s created.", collection_name)
+
+        # Create necessary indexes for efficient filtering
+
+        await client.create_payload_index(
+            collection_name=collection_name,
+            field_name=f"{QdrantFields.DATASET_ID}",
+            field_schema="keyword",
+        )
+
+        sly.logger.debug(
+            f"{QdrantFields.DATASET_ID} field indexed for collection {collection_name}"
+        )
+
         collection = await client.get_collection(collection_name)
     return collection
 
 
-@with_retries()
-@timeit
-async def get_items_by_ids(
-    collection_name: str, image_ids: List[int], with_vectors: bool = False
-) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
-    """Get vectors from the collection based on the specified image IDs.
+async def collection_exists(collection_name: str) -> bool:
+    """Check if a collection with the specified name exists.
 
-    :param collection_name: The name of the collection to get vectors from.
+    :param collection_name: The name of the collection to check.
     :type collection_name: str
-    :param image_ids: A list of image IDs to get vectors for.
-    :type image_ids: List[int]
-    :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
-    :type with_vectors: bool, optional
-    :return: A list of vectors.
-    :rtype: List[np.ndarray]
+    :return: True if the collection exists, False otherwise.
+    :rtype: bool
     """
-    points = await client.retrieve(
-        collection_name, image_ids, with_payload=True, with_vectors=with_vectors
-    )
-    image_infos = [ImageInfoLite(point.id, **point.payload) for point in points]
-    if with_vectors:
-        vectors = [point.vector for point in points]
-        return image_infos, vectors
-    return image_infos
+
+    try:
+        await client.get_collection(collection_name)
+        return True
+    except UnexpectedResponse:
+        return False
 
 
 @with_retries(retries=5, sleep_time=2)
@@ -109,14 +263,11 @@ async def upsert(
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     """
-    await client.upsert(
-        collection_name,
-        Batch(
-            vectors=vectors,
-            ids=[image_info.id for image_info in image_infos],
-            payloads=get_payloads(image_infos),
-        ),
-    )
+
+    ids = [image_info.id for image_info in image_infos]
+    payloads = create_payloads(image_infos)
+    sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
+    await client.upsert(collection_name, Batch(vectors=vectors, ids=ids, payloads=payloads))
 
     if sly.is_development():
         # By default qdrant should overwrite vectors with the same ids
@@ -124,14 +275,13 @@ async def upsert(
         # Do not use this in production since it will slow down the process.
         collecton_info = await client.get_collection(collection_name)
         sly.logger.debug(
-            f"Collection {collection_name} has {collecton_info.points_count} vectors."
+            "Collection %s has %d vectors.", collection_name, collecton_info.points_count
         )
 
 
 @with_retries()
-async def get_diff(
-    collection_name: str, image_infos: List[ImageInfoLite]
-) -> List[ImageInfoLite]:
+@timeit
+async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> List[ImageInfoLite]:
     """Get the difference between ImageInfoLite objects and points from the collection.
     Returns ImageInfoLite objects that need to be updated.
 
@@ -143,24 +293,24 @@ async def get_diff(
     :rtype: List[ImageInfoLite]
     """
     # Get specified ids from collection, compare updated_at and return ids that need to be updated.
-    points = await client.retrieve(
-        collection_name,
-        [image_info.id for image_info in image_infos],
-        with_payload=True,
-    )
-    sly.logger.debug(
-        f"Retrieved {len(points)} points from collection {collection_name}"
-    )
+
+    ids = [image_info.id for image_info in image_infos]
+
+    points = await client.retrieve(collection_name=collection_name, ids=ids, with_payload=True)
+    sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
 
     diff = _diff(image_infos, points)
 
-    sly.logger.debug(f"Found {len(diff)} points that need to be updated.")
+    sly.logger.debug("Found %d points that need to be updated.", len(diff))
     if sly.is_development():
         # To avoid unnecessary computations in production,
         # only log the percentage of points that need to be updated in development.
-        percent = round(len(diff) / len(image_infos) * 100, 2)
+        percent = round(len(diff) / len(image_infos) * 100, 2) if len(image_infos) > 0 else 0
         sly.logger.debug(
-            f"From the total of {len(image_infos)} points, {len(diff)} points need to be updated. ({percent}%)"
+            "From the total of %d points, %d points need to be updated. (%.2f%%)",
+            len(image_infos),
+            len(diff),
+            percent,
         )
 
     return diff
@@ -168,48 +318,49 @@ async def get_diff(
 
 @timeit
 def _diff(
-    image_infos: List[ImageInfoLite], points: List[Dict[str, Any]]
+    image_infos: List[ImageInfoLite],
+    points: List[Dict[str, Any]],
 ) -> List[ImageInfoLite]:
-    """Compare ImageInfoLite objects with points from the collection and return the difference.
-    Uses updated_at field to compare points.
+    """Get the difference between ImageInfoLite objects and points from the collection.
 
     :param image_infos: A list of ImageInfoLite objects.
     :type image_infos: List[ImageInfoLite]
     :param points: A list of dictionaries with points from the collection.
     :type points: List[Dict[str, Any]]
-    :return: A list of ImageInfoLite objects that need to be updated.
+    :return: List of ImageInfoLite objects that need to be updated.
     :rtype: List[ImageInfoLite]
     """
+
     # If the point with the same id doesn't exist in the collection, it will be added to the diff.
-    # If the point with the same id exsts - check if updated_at is exactly the same, or add to the diff.
+    # If the point with the same id exsts - check if IDs are in the payload, if not - add them to the diff.
     # Image infos and points have different length, so we need to iterate over image infos.
     diff = []
     points_dict = {point.id: point for point in points}
 
     for image_info in image_infos:
         point = points_dict.get(image_info.id)
-        if (
-            point is None
-            or point.payload.get(TupleFields.UPDATED_AT) != image_info.updated_at
-        ):
+        if point is None or point.payload.get(TupleFields.UPDATED_AT) != image_info.updated_at:
             diff.append(image_info)
 
     return diff
 
 
 @timeit
-def get_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
-    """Get payloads from ImageInfoLite objects.
-    Converts named tuples to dictionaries and removes the id field.
+def create_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
+    """
+    Prepare payloads for ImageInfoLite objects before upserting to Qdrant.
+    Converts named tuples to dictionaries and removes fields:
+       - ID
+       - SCORE
 
     :param image_infos: A list of ImageInfoLite objects.
-    :type image_infos: List[ImageInfoLite]
+    :type image_infos: List[ImageInfoLite]    :
     :return: A list of payloads.
     :rtype: List[Dict[str, Any]]
     """
-    ignore_fields = [TupleFields.ID]
+    ignore_fields = [TupleFields.ID, TupleFields.SCORE]
     payloads = [
-        {k: v for k, v in image_info._asdict().items() if k not in ignore_fields}
+        {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
         for image_info in image_infos
     ]
     return payloads
@@ -221,8 +372,11 @@ async def search(
     collection_name: str,
     query_vector: np.ndarray,
     limit: int,
+    query_filter: Optional[types.Filter] = None,
     return_vectors: bool = False,
-) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
+    return_scores: bool = True,
+    score_threshold: Optional[float] = None,
+) -> Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]:
     """Search for similar items in the collection based on the query vector.
     If return_vectors is True, returns vectors along with ImageInfoLite objects.
     NOTE: Do not set return_vectors to True unless necessary, since it will slow down the process
@@ -234,29 +388,49 @@ async def search(
     :type query_vector: np.ndarray
     :param limit: The number of items to return.
     :type limit: int
+    :param query_filter: The filter to use for searching, defaults to None.
+    :type query_filter: Optional[types.Filter], optional
     :param return_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type return_vectors: bool, optional
-    :return: A list of ImageInfoLite objects and vectors if return_vectors is True.
-    :rtype: Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]
+    :param return_scores: Whether to return scores along with ImageInfoLite objects, defaults to True.
+    :type return_scores: bool, optional
+    :param score_threshold: The threshold for scores, defaults to None.
+    :type score_threshold: Optional[float], optional
+    :return: A dictionary with keys "items", "vectors" and "scores".
+    :rtype: Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]
     """
-    points = await client.search(
-        collection_name,
-        query_vector,
+
+    response = await client.query_points(
+        collection_name=collection_name,
+        query=query_vector,
+        query_filter=query_filter,
         limit=limit,
         with_payload=True,
         with_vectors=return_vectors,
+        score_threshold=score_threshold,
     )
-    image_infos = [ImageInfoLite(point.id, **point.payload) for point in points]
+    result = {}
+
+    result[SearchResultField.ITEMS] = [
+        ImageInfoLite(id=point.id, **point.payload) for point in response.points
+    ]
+
     if return_vectors:
-        vectors = [point.vector for point in points]
-        return image_infos, vectors
-    return image_infos
+        result[SearchResultField.VECTORS] = [point.vector for point in response.points]
+
+    if return_scores:
+        result[SearchResultField.SCORES] = [point.score for point in response.points]
+
+    return result
 
 
 @with_retries()
 @timeit
 async def get_items(
-    collection_name: str, limit: int = None
+    collection_name: str,
+    limit: int = None,
+    batch_size: int = 10000,
+    with_vectors: bool = False,
 ) -> Tuple[List[ImageInfoLite], List[np.ndarray]]:
     """Returns specified number of items from the collection. If limit is not specified, returns all items.
 
@@ -264,145 +438,157 @@ async def get_items(
     :type collection_name: str
     :param limit: The number of items to return, defaults to None.
     :type limit: int, optional
+    :param batch_size: The number of items to retrieve in each batch to efficiently get all items, defaults to 10000.
+    :type batch_size: int, optional
+    :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
+    :type with_vectors: bool, optional
     :return: A tuple of ImageInfoLite objects and vectors.
     :rtype: Tuple[List[ImageInfoLite], List[np.ndarray]]
     """
+    all_points = []
+    next_offset = None
+    total = 0
+
     if not limit:
         collection = await client.get_collection(collection_name)
         limit = collection.points_count
-    points, _ = await client.scroll(
-        collection_name, limit=limit, with_payload=True, with_vectors=True
-    )
-    sly.logger.debug(
-        f"Retrieved {len(points)} points from collection {collection_name}."
-    )
-    return [ImageInfoLite(point.id, **point.payload) for point in points], [
-        point.vector for point in points
-    ]
 
+    while total < limit:
+        current_batch_size = min(batch_size, limit - total)
+        points, next_offset = await client.scroll(
+            collection_name=collection_name,
+            limit=current_batch_size,
+            with_payload=True,
+            with_vectors=with_vectors,
+            offset=next_offset,
+        )
+        if not points:
+            break
+        all_points.extend(points)
+        total += len(points)
+        if len(points) < current_batch_size:
+            break  # No more points to fetch
 
-@timeit
-async def diverse(
-    collection_name: str,
-    num_images: int,
-    method: str,
-) -> List[ImageInfoLite]:
-    """Generate a diverse population of images using the specified method.
+    all_points = all_points[:limit]
 
-    :param collection_name: The name of the collection to get items from.
-    :type collection_name: str
-    :param num_images: The number of diverse images to generate.
-    :type num_images: int
-    :param method: The method to use for generating diverse images.
-    :type method: str
-    :raises ValueError: If the method is not supported.
-    :return: A list of diverse images as ImageInfoLite objects.
-    :rtype: List[ImageInfoLite]
-    """
-    if method == QdrantFields.KMEANS:
-        return await diverse_kmeans(collection_name, num_images)
+    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
+
+    sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
+    if with_vectors:
+        vectors = [point.vector for point in points]
     else:
-        raise ValueError(f"Method {method} is not supported.")
+        vectors = []
+    return image_infos, vectors
 
 
+@with_retries()
 @timeit
-async def diverse_kmeans(
+async def get_items_by_id(
     collection_name: str,
-    num_images: int,
-    option: Literal["random", "centroids"] = None,
-    num_clusters: int = None,
-) -> List[ImageInfoLite]:
-    """Generate a diverse population of images using KMeans clustering.
-    Two options are available: "random" and "centroids".
-    The "random" option chooses a random image from each cluster.
-    The "centroids" option chooses the image closest to the centroid of each cluster.
+    image_ids: List[int],
+    with_vectors: bool = False,
+) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
+    """Get vectors from the collection based on the image IDs.
+
+    :param collection_name: The name of the collection to get vectors from.
+    :type collection_name: str
+    :param image_ids: A list image IDs to retrieve from the collection.
+    :type image_ids: List[int]
+    :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
+    :type with_vectors: bool, optional
+    :return: A list of vectors.
+    :rtype: List[np.ndarray]
+    """
+
+    points = await client.retrieve(
+        collection_name=collection_name,
+        ids=image_ids,
+        with_payload=True,
+        with_vectors=with_vectors,
+    )
+
+    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
+
+    if with_vectors:
+        vectors = [point.vector for point in points]
+    else:
+        vectors = []
+    return image_infos, vectors
+
+
+@with_retries()
+async def get_item_payloads(collection_name: str, ids=List[str]) -> Dict[str, Any]:
+    """
+    Get payloads of items from the collection based on the specified IDs.
+    IDs that don't exist in the collection will have None as their payload value.
 
     :param collection_name: The name of the collection to get items from.
     :type collection_name: str
-    :param num_images: The number of diverse images to generate.
-    :type num_images: int
-    :param option: The option to use for choosing images from clusters, defaults to None.
-    :type option: Literal["random", "centroids"], optional
-    :param num_clusters: The number of clusters to use in KMeans clustering.
-    :type num_clusters: int
-    :return: A list of diverse images as ImageInfoLite objects.
-    :rtype: List[ImageInfoLite]
+    :param ids: The IDs of the items to return.
+    :type ids: List[Union[int, str]]
+    :return: A dictionary with ID keys and payload values.
+    :rtype: Dict[str, Any]
     """
-    image_infos, vectors = await get_items(collection_name)
-    if sly.is_development():
-        vectors_size = asizeof.asizeof(vectors) / 1024 / 1024
-        sly.logger.debug(f"Vectors size: {vectors_size:.2f} MB.")
-    if not num_clusters:
-        num_clusters = int(sqrt(len(image_infos) / 2))
-        sly.logger.debug(f"Number of clusters is set to {num_clusters}.")
-    if not option:
-        option = QdrantFields.RANDOM
-        sly.logger.debug(f"Option is set to {option}.")
-    kmeans = KMeans(n_clusters=num_clusters).fit(vectors)
-    labels = kmeans.labels_
-    sly.logger.debug(
-        f"KMeans clustering with {num_clusters} and {option} option is done."
+
+    points = await client.retrieve(
+        collection_name,
+        ids,
+        with_payload=True,
+        with_vectors=False,
     )
+    sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
 
-    diverse_images = []
-    while len(diverse_images) < num_images:
-        for cluster_id in set(labels):
-            cluster_image_infos = [
-                image_info
-                for image_info, label in zip(image_infos, labels)
-                if label == cluster_id
-            ]
-            if not cluster_image_infos:
-                continue
+    # Create initial dictionary with all IDs set to None
+    result = {str(id_): None for id_ in ids}
 
-            if option == QdrantFields.RANDOM:
-                # Randomly choose an image from the cluster.
-                image_info = choice(cluster_image_infos)
-            elif option == QdrantFields.CENTROIDS:
-                # Choose the image closest to the centroid of the cluster.
-                cluster_vectors = [
-                    vector
-                    for vector, label in zip(vectors, labels)
-                    if label == cluster_id
-                ]
-                centroid = np.mean(cluster_vectors, axis=0)
-                distances = [
-                    np.linalg.norm(vector - centroid) for vector in cluster_vectors
-                ]
-                image_info = cluster_image_infos[distances.index(min(distances))]
-            diverse_images.append(image_info)
-            image_infos.remove(image_info)
-            if len(diverse_images) == num_images:
-                break
+    # Update with actual payloads for IDs that exist
+    for point in points:
+        result[str(point.id)] = point.payload
 
-    return diverse_images
+    return result
 
 
-@timeit
-async def get_single_point(
-    collection_name: str,
-    vector: np.ndarray,
-    limit: int,
-    option: Literal["farthest", "closest", "random"] = "farthest",
-) -> Tuple[ImageInfoLite, np.ndarray]:
-    """Get a single point from the collection based on the specified option.
-    Options available: "farthest", "closest", "random".
-    NOTE: This function is too slow, need to find an option to get farthest point from Qdrant.
+@with_retries()
+async def update_payloads(
+    collection_name: str, id_to_payload: Dict[str, Dict], wait: bool = False
+) -> None:
+    """Update payloads of items in the collection based on the specified IDs.
 
-    :param collection_name: The name of the collection to get items from.
+    :param collection_name: The name of the collection to update items in.
     :type collection_name: str
-    :param vector: The vector to use for searching.
-    :type vector: np.ndarray
-    :param limit: The number of items to search.
-    :type limit: int
-    :param option: The option to use for choosing the point, defaults to "farthest".
-    :type option: Literal["farthest", "closest", "random"], optional
-    :return: The ImageInfoLite object and the vector of the chosen point.
-    :rtype: Tuple[ImageInfoLite, np.ndarray]
+    :param id_to_payload: A dictionary with ID keys and payload values.
+    :type id_to_payload: Dict[str, Dict]
+    :param wait: Whether to wait for the operation to complete, defaults to False.
+    :type wait: bool, optional
     """
-    raise NotImplementedError(
-        "This function is too slow, need to find an option to get farthest point from Qdrant."
+    if len(id_to_payload) == 0:
+        return
+
+    await client.batch_update_points(
+        collection_name,
+        update_operations=[
+            OverwritePayloadOperation(
+                overwrite_payload=SetPayload(
+                    payload=payload,
+                    points=[point_id],
+                )
+            )
+            for point_id, payload in id_to_payload.items()
+        ],
+        wait=wait,
     )
-    image_infos, vectors = await search(
-        collection_name, vector, limit, return_vectors=True
-    )
+
+
+@with_retries()
+async def delete_collection(collection_name: str) -> None:
+    """Delete a collection with the specified name.
+
+    :param collection_name: The name of the collection to delete.
+    :type collection_name: str
+    """
+    sly.logger.debug(f"Deleting collection {collection_name}...")
+    try:
+        await client.delete_collection(collection_name)
+        sly.logger.debug(f"Collection {collection_name} deleted.")
+    except UnexpectedResponse:
+        sly.logger.debug(f"Collection {collection_name} wasn't found while deleting.")
