@@ -75,9 +75,6 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         },
     )
 
-    me = api.user.get_my_info()
-    sly.logger.info(f"Request from user: {me.name} (ID: {me.id})")
-
     collection_msg = f"[Collection: {event.project_id}] "
 
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
@@ -200,8 +197,6 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 "threshold": event.threshold,
             },
         )
-        me = api.user.get_my_info()
-        sly.logger.info(f"Request from user: {me.name} (ID: {me.id})")
 
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
 
@@ -353,8 +348,6 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
             "image_ids": event.image_ids,
         },
     )
-    me = api.user.get_my_info()
-    sly.logger.info(f"Request from user: {me.name} (ID: {me.id})")
 
     # ------------------------------------ Step 1: Get Image Vectors From Qdrant ------------------------------------ #
     if event.image_ids:
