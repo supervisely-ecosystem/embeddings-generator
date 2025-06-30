@@ -12,8 +12,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
-from supervisely.api.entities_collection_api import (CollectionItem,
-                                                     CollectionType)
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 
@@ -1002,6 +1001,22 @@ def link_to_uuid(image_link: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, image_link)
 
 
+def _start_projections_service(
+    api: sly.Api,
+    module_id: int,
+    workspace_id: int,
+) -> sly.api.task_api.TaskInfo:
+    """Starts the projections service app."""
+    session = api.app.start(
+        agent_id=None,
+        module_id=module_id,
+        workspace_id=workspace_id,
+        params={},  # ! TODO: remove after sly SDK release
+    )
+    api.app.wait(session.task_id, target_status=sly.task.Status.STARTED)
+    return session
+
+
 @with_retries()
 @to_thread
 def start_projections_service(api: sly.Api, project_id: int):
@@ -1012,27 +1027,21 @@ def start_projections_service(api: sly.Api, project_id: int):
     project = api.project.get_info_by_id(project_id)
     team_id = project.team_id
     workspace_id = project.workspace_id
-    sessions = api.app.get_sessions(
-        team_id, module_info.id, statuses=[api.task.Status.STARTED]
-    )
+    sessions = api.app.get_sessions(team_id, module_info.id, statuses=[api.task.Status.STARTED])
     me = api.user.get_my_info()
     sessions = [s for s in sessions if s.user_id == me.id]
     if len(sessions) == 0:
-        sly.logger.debug("Not found projections service session for current user, starting new one")
-        try:
-            session = api.app.start(
-                agent_id=None,
-                module_id=module_info.id,
-                workspace_id=workspace_id,
-                params={}, # ! TODO: remove after sly SDK release
-            )
-            api.app.wait(session.task_id, target_status=api.task.Status.STARTED)
-        except Exception as e:
-            sly.logger.error("Failed to start app", exc_info=e)
-            return
+        session = _start_projections_service(api, module_info.id, workspace_id)
     else:
         session = sessions[0]
+
     ready = api.app.wait_until_ready_for_api_calls(session.task_id)
+    if not ready:
+        sly.logger.info("Restarting Projections service...")
+        session = _start_projections_service(api, module_info.id, workspace_id)
+        ready = api.app.wait_until_ready_for_api_calls(session.task_id)
+        if not ready:
+            raise RuntimeError("Projections service is not ready for API calls after restart")
     return session.task_id
 
 
