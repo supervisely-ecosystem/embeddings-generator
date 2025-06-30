@@ -14,6 +14,7 @@ import supervisely as sly
 from supervisely._utils import batched, resize_image_url
 from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
+from supervisely.api.app_api import SessionInfo
 
 
 class TupleFields:
@@ -1005,7 +1006,7 @@ def _start_projections_service(
     api: sly.Api,
     module_id: int,
     workspace_id: int,
-) -> sly.api.task_api.TaskInfo:
+) -> SessionInfo:
     """Starts the projections service app."""
     session = api.app.start(
         agent_id=None,
