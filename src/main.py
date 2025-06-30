@@ -200,7 +200,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
 
-        if qdrant.collection_exists(event.project_id) is False:
+        if await qdrant.collection_exists(event.project_id) is False:
             message = f"Embeddings collection for project {event.project_id} does not exist. Please create embeddings first."
             sly.logger.warning(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
