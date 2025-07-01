@@ -4,7 +4,6 @@ from typing import Dict, List
 
 import numpy as np
 import supervisely as sly
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from supervisely.imaging.color import get_predefined_colors
@@ -23,19 +22,16 @@ from src.utils import (
     ImageInfoLite,
     ResponseFields,
     ResponseStatus,
-    is_team_plan_sufficient,
     create_lite_image_infos,
     embeddings_up_to_date,
-    get_lite_image_infos,
     get_project_info,
     image_get_list_async,
+    is_team_plan_sufficient,
     parse_timestamp,
-    run_safe,
     send_request,
     set_embeddings_in_progress,
     set_project_embeddings_updated_at,
     start_projections_service,
-    stop_projections_service,
     timeit,
 )
 from src.visualization import (
@@ -98,7 +94,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     if project_info.embeddings_in_progress:
         message = f"{collection_msg} Embeddings creation is already in progress. Skipping."
         sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=409)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
     # ---------------------- Step 2: Check If Embeddings Are Already Up To Date. --------------------- #
 
@@ -133,7 +129,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     if len(images_to_create) == 0 and len(images_to_delete) == 0:
         message = f"{collection_msg} Embeddings are up to date. Skipping."
         sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=409)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
     async def execute():
         try:
@@ -223,7 +219,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
         if await qdrant.collection_exists(event.project_id) is False:
-            message = f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
+            message = (
+                f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
+            )
             sly.logger.warning(message)
             api.project.disable_embeddings(project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
@@ -254,7 +252,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 )
 
             lite_image_infos = await create_lite_image_infos(
-                cas_size=g.IMAGE_SIZE_FOR_CAS,
+                cas_size=g.IMAGE_SIZE_FOR_CLIP,
                 image_infos=image_infos,
             )
             sly.logger.debug(
@@ -446,9 +444,6 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     collection_manager = DiverseCollectionManager(api, event.project_id)
     collection_id = await collection_manager.save(result)
-
-    # * commented out because the projections service will be stopped by its own scheduler
-    # await stop_projections_service(api, projections_service_task_id)
 
     return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
 

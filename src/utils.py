@@ -3,7 +3,6 @@ import base64
 import datetime
 import hashlib
 import json
-import random
 import uuid
 from dataclasses import dataclass
 from functools import partial, wraps
@@ -12,9 +11,9 @@ from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
+from supervisely.api.app_api import SessionInfo
 from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
-from supervisely.api.app_api import SessionInfo
 
 
 class TupleFields:
@@ -427,7 +426,7 @@ async def create_lite_image_infos(
 ) -> List[ImageInfoLite]:
     """Returns lite version of image infos to cut off unnecessary data.
 
-    :param cas_size: Size of the image for CAS, it will be added to URL.
+    :param cas_size: Size of the image for CLIP, it will be added to URL.
     :type cas_size: int
     :param image_infos: List of image infos to get lite version from.
     :type image_infos: List[sly.ImageInfo]
@@ -471,7 +470,7 @@ async def get_lite_image_infos(
 
     :param api: Instance of supervisely API.
     :type api: sly.Api
-    :param cas_size: Size of the image for CAS, it will be added to URL.
+    :param cas_size: Size of the image for CLIP, it will be added to URL.
     :type cas_size: int
     :param project_id: ID of the project to get images from.
     :type project_id: int
@@ -1067,3 +1066,15 @@ def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
     """
     team_info = api.team.get_info_by_id(team_id)
     return team_info.usage.plan != "free"
+
+
+def get_app_host(api: sly.Api, slug: str) -> str:
+    """Get the app host URL from the Supervisely API.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :return: The app host URL.
+    :rtype: str
+    """
+    host = api.server_address + "/net/" + api.app.get_session_token(slug)
+    return host

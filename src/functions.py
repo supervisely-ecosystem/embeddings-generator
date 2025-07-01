@@ -1,5 +1,3 @@
-import asyncio
-import time
 from typing import List, Optional, Tuple
 
 import supervisely as sly
@@ -11,11 +9,7 @@ import src.qdrant as qdrant
 from src.utils import (
     create_lite_image_infos,
     fix_vectors,
-    get_all_projects,
-    get_datasets,
-    get_lite_image_infos,
     get_project_info,
-    get_team_info,
     image_get_list_async,
     parse_timestamp,
     set_image_embeddings_updated_at,
@@ -60,7 +54,7 @@ async def process_images(
         return to_create, vectors
 
     to_create = await create_lite_image_infos(
-        cas_size=g.IMAGE_SIZE_FOR_CAS,
+        cas_size=g.IMAGE_SIZE_FOR_CLIP,
         image_infos=to_create,
     )
 
@@ -155,4 +149,3 @@ async def update_embeddings(
     if len(image_infos) > 0:
         await set_image_embeddings_updated_at(api, image_infos)
         await set_project_embeddings_updated_at(api, project_id)
-

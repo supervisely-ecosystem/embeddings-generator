@@ -48,11 +48,11 @@ async def create_projections(
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
     if image_ids is None:
         image_infos = await get_lite_image_infos(
-            api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, dataset_id=dataset_id
+            api, cas_size=g.IMAGE_SIZE_FOR_CLIP, project_id=project_id, dataset_id=dataset_id
         )
     else:
         image_infos = await get_lite_image_infos(
-            api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, image_ids=image_ids
+            api, cas_size=g.IMAGE_SIZE_FOR_CLIP, project_id=project_id, image_ids=image_ids
         )
     # image_hashes = [info.hash for info in image_infos]
 
@@ -150,7 +150,7 @@ async def get_projections(
     vectors = pcd.points[:, :2]
     image_ids = pcd.image_ids
     image_infos = await get_lite_image_infos(
-        api, cas_size=g.IMAGE_SIZE_FOR_CAS, project_id=project_id, image_ids=image_ids
+        api, cas_size=g.IMAGE_SIZE_FOR_CLIP, project_id=project_id, image_ids=image_ids
     )
     return image_infos, vectors.tolist()
 
