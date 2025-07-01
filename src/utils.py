@@ -1051,3 +1051,19 @@ def start_projections_service(api: sly.Api, project_id: int):
 def stop_projections_service(api: sly.Api, task_id: int):
     status = api.task.stop(task_id)
     return status
+
+
+@to_thread
+@timeit
+def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
+    """Check if the team has a usage plan that allows for embeddings.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param team_id: ID of the team to check.
+    :type team_id: int
+    :return: True if the team has a usage plan that allows for embeddings, False otherwise.
+    :rtype: bool
+    """
+    team_info = api.team.get_info_by_id(team_id)
+    return team_info.usage.plan.lower() != "free"

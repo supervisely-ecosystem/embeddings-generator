@@ -23,6 +23,7 @@ from src.utils import (
     ImageInfoLite,
     ResponseFields,
     ResponseStatus,
+    is_team_plan_sufficient,
     create_lite_image_infos,
     embeddings_up_to_date,
     get_lite_image_infos,
@@ -59,6 +60,13 @@ if sly.is_development():
 @timeit
 async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     """
+    Endpoint to create embeddings for images in a project.
+    If `force` is True, it will delete the existing collection and create a new one.
+    If `return_vectors` is True, it will return the vectors of the created embeddings.
+
+    :param api: Supervisely API object.
+    :param event: Event object containing parameters for creating embeddings.
+
     Examples of requests:
     1. Calculate embeddings for all images in the project.
     data = {"project_id": <your-project-id>, "team_id": <your-team-id>}
@@ -78,6 +86,12 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     collection_msg = f"[Collection: {event.project_id}] "
 
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+
+    # --------------------- Step 0: Check Team Subscription Plan. --------------------- #
+    if not await is_team_plan_sufficient(api, project_info.team_id):
+        message = f"Team {project_info.team_id} with 'free' plan cannot create embeddings. "
+        sly.logger.warning(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
 
     # --------------------- Step 1: Check If Embeddings Are Already In Progress. --------------------- #
 
@@ -190,19 +204,28 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             f"Searching for similar images in project {event.project_id}",
             extra={
                 "prompt": event.prompt,
-                "by_image_ids": event.by_image_ids, # If True, search will be performed by image IDs.
+                "by_image_ids": event.by_image_ids,  # If True, search will be performed by image IDs.
                 "limit": event.limit,
-                "image_ids": event.image_ids, # Image IDs to filter the search results.
+                "image_ids": event.image_ids,  # Image IDs to filter the search results.
                 "dataset_id": event.dataset_id,
                 "threshold": event.threshold,
             },
         )
 
-        # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
+        # ----------------- Step 0: Check Team Subscription Plan. ---------------- #
+        project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+        if not await is_team_plan_sufficient(api, project_info.team_id):
+            message = (
+                f"Team {project_info.team_id} with 'free' plan cannot use the AI search features."
+            )
+            sly.logger.error(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
 
+        # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
         if await qdrant.collection_exists(event.project_id) is False:
-            message = f"Embeddings collection for project {event.project_id} does not exist. Please create embeddings first."
+            message = f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
             sly.logger.warning(message)
+            api.project.disable_embeddings(project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
         collection_manager = AiSearchCollectionManager(api, event.project_id)
@@ -349,7 +372,23 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         },
     )
 
-    # ------------------------------------ Step 1: Get Image Vectors From Qdrant ------------------------------------ #
+    # ----------------- Step 0: Check Team Subscription Plan. ---------------- #
+    project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+    if not await is_team_plan_sufficient(api, project_info.team_id):
+        message = f"Team {project_info.team_id} with 'free' plan cannot use the AI search features."
+        sly.logger.error(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
+
+    # ----------------- Step 1: Check If Collection Exists ---------------- #
+    if await qdrant.collection_exists(event.project_id) is False:
+        message = (
+            f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
+        )
+        sly.logger.warning(message)
+        api.project.disable_embeddings(project_info.id)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
+
+    # ------------------------------------ Step 2: Get Image Vectors From Qdrant ------------------------------------ #
     if event.image_ids:
         image_infos, vectors = await qdrant.get_items_by_id(
             event.project_id, event.image_ids, with_vectors=True
@@ -366,7 +405,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     if len(vectors) == 0:
         return JSONResponse({ResponseFields.MESSAGE: "No vectors found."})
 
-    # ------------------------- Step 2: Prepare Data For Projections Service ------------------------- #
+    # ------------------------- Step 3: Prepare Data For Projections Service ------------------------- #
 
     data = {
         "vectors": vectors,
@@ -381,7 +420,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     elif event.clustering_method == ClusteringMethods.DBSCAN:
         data["settings"] = {"clustering_method": event.clustering_method}
 
-    # -------------------------------- Step 3: Run Projections Service ------------------------------- #
+    # -------------------------------- Step 4: Run Projections Service ------------------------------- #
     try:
         projections_service_task_id = await start_projections_service(api, event.project_id)
     except Exception as e:
@@ -391,7 +430,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
             status_code=500,
         )
 
-    # --------------- Step 4: Send Request To Projections Service And Return The Result -------------- #
+    # --------------- Step 5: Send Request To Projections Service And Return The Result -------------- #
     samples = await send_request(
         api, task_id=projections_service_task_id, method="diverse", data=data
     )
@@ -409,7 +448,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     collection_id = await collection_manager.save(result)
 
     # * commented out because the projections service will be stopped by its own scheduler
-    # await stop_projections_service(api, projections_service_task_id) 
+    # await stop_projections_service(api, projections_service_task_id)
 
     return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
 
