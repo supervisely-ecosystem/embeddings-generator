@@ -112,15 +112,7 @@ Generate or update embeddings for project images.
 ```python
 # Generate embeddings for all images in project
 data = {"project_id": 12345, "team_id": 67890}
-api.task.send_request(task_id, "embeddings", data, skip_response=True)
-
-# Generate embeddings for specific images
-data = {"image_ids": [101, 102, 103], "team_id": 67890}
-api.task.send_request(task_id, "embeddings", data, skip_response=True)
-
-# Force regeneration of all embeddings
-data = {"project_id": 12345, "team_id": 67890, "force": True}
-api.task.send_request(task_id, "embeddings", data, skip_response=True)
+api.task.send_request(task_id, "embeddings", data)
 ```
 
 ### `/search` - Semantic Search
@@ -131,7 +123,7 @@ Search for similar images using text prompts or reference images.
 
 ```python
 # Text-to-image search
-data = {"project_id": 12345, "limit": 50, "prompt": "red car on highway"}
+data = {"project_id": 12345, "limit": 50, "prompt": "red car"}
 response = api.task.send_request(task_id, "search", data)
 
 # Image-to-image search
@@ -156,11 +148,11 @@ Select diverse images using clustering algorithms.
 
 ```python
 # K-means diverse selection
-data = {"project_id": 12345, "method": "kmeans", "limit": 100}
+data = {"project_id": 12345, "clustering_method": "kmeans", "sampling_method": "random", "sample_size": 10}
 response = api.task.send_request(task_id, "diverse", data)
 
 # Random diverse selection
-data = {"project_id": 12345, "method": "random", "limit": 50}
+data = {"project_id": 12345, "clustering_method": "dbscan", "sampling_method": "centroids", "sample_size": 10}
 response = api.task.send_request(task_id, "diverse", data)
 ```
 
