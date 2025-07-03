@@ -1074,6 +1074,11 @@ def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
     :rtype: bool
     """
     team_info = api.team.get_info_by_id(team_id)
+    
+    # If usage is None or plan is None, allow embeddings
+    if team_info.usage is None or team_info.usage.plan is None:
+        return True
+    
     return team_info.usage.plan != "free"
 
 
