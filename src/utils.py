@@ -1020,10 +1020,19 @@ def _start_projections_service(
 @with_retries()
 @to_thread
 def start_projections_service(api: sly.Api, project_id: int):
-    #! replace with projections service slug when available
-    module_info = api.app.get_ecosystem_module_info(
-        slug="546804b13d9ed54a9105b9f850c14d14/projections-service"
-    )
+    try:
+        module_info = api.app.get_ecosystem_module_info(
+            slug="supervisely-ecosystem/projections-service"
+        )
+    except Exception:
+        sly.logger.warning(
+            f"[Project: {project_id}] Projections service module not found, trying to start legacy projections service."
+        )
+        module_info = api.app.get_ecosystem_module_info(
+            slug="546804b13d9ed54a9105b9f850c14d14/projections-service"
+        )
+        if module_info is None:
+            raise RuntimeError("Projections service module not found in ecosystem.")
     project = api.project.get_info_by_id(project_id)
     team_id = project.team_id
     workspace_id = project.workspace_id

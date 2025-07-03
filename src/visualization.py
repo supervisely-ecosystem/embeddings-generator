@@ -220,7 +220,7 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
         image_infos, projections = await create_projections(
             api,
             project_id,
-            # image_ids=image_ids, #! fixme
+            # image_ids=image_ids, #! fix before enabling projections endpoints
         )
         # save projections
         await save_projections(

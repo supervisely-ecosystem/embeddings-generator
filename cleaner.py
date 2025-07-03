@@ -34,7 +34,7 @@ async def get_all_projects(
         - updated_at
         - embeddings_enabled
         - embeddings_in_progress
-        - is_embeddings_updated
+        - embeddings_updated_at
         - team_id
         - workspace_id
         - items_count
@@ -45,7 +45,7 @@ async def get_all_projects(
     fields = [
         ApiField.EMBEDDINGS_ENABLED,
         ApiField.EMBEDDINGS_IN_PROGRESS,
-        ApiField.IS_EMBEDDINGS_UPDATED,
+        ApiField.EMBEDDINGS_UPDATED_AT,
     ]
     data = {
         ApiField.SKIP_EXPORTED: True,

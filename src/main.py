@@ -79,7 +79,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         },
     )
 
-    collection_msg = f"[Collection: {event.project_id}] "
+    collection_msg = f"[Collection: {event.project_id}]"
 
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
 
@@ -172,12 +172,12 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             await set_embeddings_in_progress(api, event.project_id, False)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
-    task_id = f"embeddings_{event.project_id}_{datetime.datetime.now().timestamp()}"
+    task_id = f"{event.project_id}"
     task = asyncio.create_task(execute())
     g.background_tasks[task_id] = task
     return JSONResponse(
         {
-            ResponseFields.MESSAGE: "Embeddings creation started.",
+            ResponseFields.MESSAGE: f"{collection_msg} Embeddings creation started.",
             ResponseFields.BACKGROUND_TASK_ID: task_id,
         }
     )
@@ -196,8 +196,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # returns a list of ImageInfoLite objects for each query.
     # response: List[List[Dict]]
     try:
+        msg_prefix = f"[Project: {event.project_id}]"
         sly.logger.info(
-            f"Searching for similar images in project {event.project_id}",
+            f"{msg_prefix} Searching for similar images started.",
             extra={
                 "prompt": event.prompt,
                 "by_image_ids": event.by_image_ids,  # If True, search will be performed by image IDs.
@@ -219,9 +220,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
         if await qdrant.collection_exists(event.project_id) is False:
-            message = (
-                f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
-            )
+            message = f"{msg_prefix} Embeddings collection does not exist. Disabling..."
             sly.logger.warning(message)
             api.project.disable_embeddings(project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
@@ -238,7 +237,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 # If prompt is a comma-separated string, split it into a list.
                 text_prompts = event.prompt.split(",")
 
-        sly.logger.debug("Formatted text prompts: %s", text_prompts)
+        sly.logger.debug(f"{msg_prefix} Formatted text prompts: {text_prompts}")
 
         image_urls = []
         # If request contains image IDs, get image URLs to add to the query.
@@ -256,14 +255,13 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 image_infos=image_infos,
             )
             sly.logger.debug(
-                "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",
-                len(lite_image_infos),
+                f"{msg_prefix} Request contains image IDs, obtained {len(lite_image_infos)} image infos. Will use their URLs for the query.",
             )
             image_urls = [image_info.cas_url for image_info in lite_image_infos]
 
         # Combine text prompts and image URLs to create a query.
         queries = text_prompts + image_urls
-        sly.logger.info("Final query: %s", queries)
+        sly.logger.debug(f"{msg_prefix} Final search query: {queries}")
 
         if len(queries) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "No queries provided."})
@@ -272,8 +270,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         query_vectors = await cas.get_vectors(queries)
         sly.logger.debug(
-            "The query has been vectorized and will be used for search. Number of vectors: %d.",
-            len(query_vectors),
+            f"{msg_prefix} The query has been vectorized and will be used for search. Number of vectors: {len(query_vectors)}.",
         )
 
         # -------------------------- Step 4: Search For Similar Images In Qdrant ------------------------- #
@@ -321,7 +318,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             search_results, query = await task
             items = search_results[qdrant.SearchResultField.ITEMS]
             if len(items) == 0:
-                sly.logger.debug("No similar images found for query %s", query)
+                sly.logger.debug(f"{msg_prefix} No similar images found for query {query}")
                 continue
             # items = [info.to_json() for info in items]
             if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
@@ -331,14 +328,14 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 for i in range(len(items)):
                     items[i].score = None
             results.extend(items)  #! check if we need to select higher score result for same items
-            sly.logger.debug("Found %d similar images for a query %s", len(items), query)
+            sly.logger.info(f"{msg_prefix} Found {len(items)} similar images for a query {query}")
         if len(results) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "No similar images found."})
         # Save the results to the Entities Collection.
         collection_id = await collection_manager.save(results)
         return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
     except Exception as e:
-        sly.logger.error(f"Error during search: {str(e)}", exc_info=True)
+        sly.logger.error(f"{msg_prefix} Error during search: {str(e)}", exc_info=True)
         return JSONResponse({ResponseFields.MESSAGE: f"Search failed: {str(e)}"})
 
 
@@ -357,9 +354,9 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     # data = {"project_id": <your-project-id>, "limit": <limit>, "method": "kmeans"}
 
     """
-
+    msg_prefix = f"[Project: {event.project_id}]"
     sly.logger.info(
-        f"Generating diverse population for project {event.project_id}.",
+        f"{msg_prefix} Generating diverse population.",
         extra={
             "sampling_method": event.sampling_method,
             "sample_size": event.sample_size,
@@ -379,9 +376,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     # ----------------- Step 1: Check If Collection Exists ---------------- #
     if await qdrant.collection_exists(event.project_id) is False:
-        message = (
-            f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
-        )
+        message = f"{msg_prefix} Embeddings collection does not exist. Disabling..."
         sly.logger.warning(message)
         api.project.disable_embeddings(project_info.id)
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
@@ -422,22 +417,20 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     try:
         projections_service_task_id = await start_projections_service(api, event.project_id)
     except Exception as e:
-        sly.logger.error(f"Failed to start projections service: {str(e)}", exc_info=True)
-        return JSONResponse(
-            {ResponseFields.MESSAGE: f"Failed to start projections service: {str(e)}"},
-            status_code=500,
-        )
+        message = f"{msg_prefix} Failed to start projections service: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
     # --------------- Step 5: Send Request To Projections Service And Return The Result -------------- #
     samples = await send_request(
         api, task_id=projections_service_task_id, method="diverse", data=data
     )
     result = []
-    sly.logger.debug("Generated diverse samples: %s", samples)
+    sly.logger.debug(f"{msg_prefix} Generated diverse samples: {samples}.")
     for label, sample in samples.items():
         result.extend([image_infos[i] for i in sample])
 
-    sly.logger.debug("Generated %d diverse images.", len(result))
+    sly.logger.debug(f"{msg_prefix} Generated {len(result)} diverse images.")
 
     if len(result) == 0:
         return JSONResponse({ResponseFields.MESSAGE: "No diverse images found."})
@@ -579,16 +572,16 @@ async def projections_up_to_date_endpoint(request: Request):
 async def check_task_status(request: Request):
     try:
         req_data = await request.json()
-        task_id = req_data.get("task_id")
+        task_id = req_data.get("task_id")  # project_id
 
         if not task_id or task_id not in g.background_tasks:
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.NOT_FOUND,
-                    ResponseFields.MESSAGE: f"Task with ID {task_id} not found",
+                    ResponseFields.MESSAGE: f"[Project: {task_id}] Processing task not found",
                 }
             )
-
+        task_id = str(task_id)  # Ensure task_id is a string
         task = g.background_tasks[task_id]
 
         if task.done():
@@ -603,7 +596,7 @@ async def check_task_status(request: Request):
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.IN_PROGRESS,
-                    ResponseFields.MESSAGE: "Task is still running",
+                    ResponseFields.MESSAGE: f"[Project: {task_id}] Task is still running",
                 }
             )
 
