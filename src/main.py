@@ -604,3 +604,37 @@ async def check_task_status(request: Request):
         return JSONResponse(
             {ResponseFields.STATUS: ResponseStatus.ERROR, ResponseFields.MESSAGE: str(e)}
         )
+
+
+@server.get("/health")
+async def health_check():
+    status = "healthy"
+    checks = {}
+    try:
+        # Check Qdrant connection
+        try:
+            await qdrant.client.info()
+            checks["qdrant"] = "healthy"
+        except Exception as e:
+            checks["qdrant"] = f"unhealthy: {str(e)}"
+            status = "degraded"
+
+        # Check CLIP service availability
+        try:
+            if await cas.client.is_flow_ready():
+                checks["clip"] = "healthy"
+            else:
+                checks["clip"] = "unhealthy: CLIP service is not ready"
+                status = "degraded"
+        except Exception as e:
+            checks["clip"] = f"unhealthy: {str(e)}"
+            status = "degraded"
+
+    except Exception as e:
+        status = "unhealthy"
+        checks["general"] = f"error: {str(e)}"
+    return {
+        ResponseFields.STATUS: status,
+        "checks": checks,
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+    }
