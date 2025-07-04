@@ -610,6 +610,7 @@ async def check_task_status(request: Request):
 async def health_check():
     status = "healthy"
     checks = {}
+    status_code = 200
     try:
         # Check Qdrant connection
         try:
@@ -618,6 +619,7 @@ async def health_check():
         except Exception as e:
             checks["qdrant"] = f"unhealthy: {str(e)}"
             status = "degraded"
+            status_code = 503
 
         # Check CLIP service availability
         try:
@@ -626,15 +628,23 @@ async def health_check():
             else:
                 checks["clip"] = "unhealthy: CLIP service is not ready"
                 status = "degraded"
+                status_code = 503
         except Exception as e:
             checks["clip"] = f"unhealthy: {str(e)}"
             status = "degraded"
+            status_code = 503
 
     except Exception as e:
         status = "unhealthy"
         checks["general"] = f"error: {str(e)}"
-    return {
-        ResponseFields.STATUS: status,
-        "checks": checks,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-    }
+        status_code = 500
+    return JSONResponse(
+        {
+            ResponseFields.STATUS: status,
+            "checks": checks,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+        },
+        status_code=status_code,
+    )
