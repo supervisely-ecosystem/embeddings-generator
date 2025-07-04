@@ -1074,14 +1074,15 @@ def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
     :rtype: bool
     """
     team_info = api.team.get_info_by_id(team_id)
-    
+
     # If usage is None or plan is None, allow embeddings
     if team_info.usage is None or team_info.usage.plan is None:
         return True
-    
+
     return team_info.usage.plan != "free"
 
 
+@with_retries(retries=10, sleep_time=30)
 def get_app_host(api: sly.Api, slug: str) -> str:
     """Get the app host URL from the Supervisely API.
 
@@ -1090,5 +1091,8 @@ def get_app_host(api: sly.Api, slug: str) -> str:
     :return: The app host URL.
     :rtype: str
     """
-    host = api.server_address + "/net/" + api.app.get_session_token(slug)
+    session_token = api.app.get_session_token(slug)
+    sly.logger.debug("Session token for CLIP slug %s: %s", slug, session_token)
+    host = api.server_address.rstrip("/") + "/net/" + session_token
+    sly.logger.debug("App host URL for CLIP: %s", host)
     return host
