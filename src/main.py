@@ -313,7 +313,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 )
             )
 
-        results = []
+        results = {}
         for task in asyncio.as_completed(tasks):
             search_results, query = await task
             items = search_results[qdrant.SearchResultField.ITEMS]
@@ -327,12 +327,34 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             else:
                 for i in range(len(items)):
                     items[i].score = None
-            results.extend(items)  #! check if we need to select higher score result for same items
+            # Update results dictionary, keeping only highest scoring items
+            for item in items:
+                item_id = item.id
+                if item_id not in results:
+                    # First occurrence of this item
+                    results[item_id] = item
+                else:
+                    # Item already exists, compare scores
+                    existing_score = results[item_id].score
+                    new_score = item.score
+
+                    # Update if new score is higher (handle None scores)
+                    if existing_score is None and new_score is not None:
+                        results[item_id] = item
+                    elif (
+                        existing_score is not None
+                        and new_score is not None
+                        and new_score > existing_score
+                    ):
+                        results[item_id] = item
+                    # If both are None or new score is lower/equal, keep existing item
             sly.logger.info(f"{msg_prefix} Found {len(items)} similar images for a query {query}")
-        if len(results) == 0:
+        # Convert back to list for further processing
+        results_list = list(results.values())
+        if len(results_list) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "No similar images found."})
         # Save the results to the Entities Collection.
-        collection_id = await collection_manager.save(results)
+        collection_id = await collection_manager.save(results_list)
         return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
     except Exception as e:
         sly.logger.error(f"{msg_prefix} Error during search: {str(e)}", exc_info=True)
