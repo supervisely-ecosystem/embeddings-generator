@@ -1082,8 +1082,6 @@ def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
     return team_info.usage.plan != "free"
 
 
-@with_retries(retries=10, sleep_time=30)
-@to_thread
 def get_app_host(api: sly.Api, slug: str) -> str:
     """Get the app host URL from the Supervisely API.
 
