@@ -236,6 +236,8 @@ async def _ensure_client_ready():
 
 @timeit
 async def get_vectors(queries: List[str]) -> List[List[float]]:
+    global client
+
     await _ensure_client_ready()
 
     if client is None:
@@ -251,7 +253,13 @@ async def get_vectors(queries: List[str]) -> List[List[float]]:
 
 @timeit
 async def is_flow_ready():
-    await _ensure_client_ready()
+    global client
+
+    try:
+        await _ensure_client_ready()
+    except Exception as e:
+        sly.logger.warning("Failed to ensure CLIP client ready in health check: %s", str(e))
+        return False
 
     if client is None:
         return False
@@ -263,6 +271,8 @@ async def is_flow_ready():
             # For CasTaskClient, assume it's ready if initialization succeeded
             return True
     except Exception as e:
-        error_msg = f"Failed to check flow readiness from CLIP service: {str(e)}"
-        sly.logger.error(error_msg, exc_info=True)
-        raise RuntimeError(error_msg) from e
+        sly.logger.warning("CLIP flow readiness check failed in health check: %s", str(e))
+        # Invalidate client when readiness check fails
+        global client
+        client = None
+        return False
