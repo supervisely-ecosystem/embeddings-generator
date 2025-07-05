@@ -12,11 +12,11 @@ from typing import Callable, Dict, List, Optional, Union
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
 from supervisely.api.app_api import SessionInfo
-from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
-from src.globals import projections_slug
-
+PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
 
 class TupleFields:
     """Fields of the named tuples used in the project."""
@@ -1023,7 +1023,7 @@ def _start_projections_service(
 def start_projections_service(api: sly.Api, project_id: int):
     try:
         e_msg = ""
-        module_info = api.app.get_ecosystem_module_info(slug=projections_slug)
+        module_info = api.app.get_ecosystem_module_info(slug=PROJECTIONS_SLUG)
     except Exception as e:
         e_msg = f"Error: {str(e)}"
         module_info = None

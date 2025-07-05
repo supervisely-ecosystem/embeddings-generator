@@ -13,6 +13,8 @@ from supervisely.sly_logger import logger
 import src.globals as g
 from src.utils import send_request, timeit, with_retries
 
+CLIP_SLUG = "supervisely-ecosystem/deploy-clip-as-service"
+
 
 class SlyCasClient(Client):
     def __init__(self, server: str, credential: dict = {}, **kwargs):
@@ -148,7 +150,7 @@ def _init_client() -> Union[CasUrlClient, CasClient]:
     if processed_clip_host is None or processed_clip_host == "":
         from src.utils import get_app_host
 
-        processed_clip_host = get_app_host(g.api, g.clip_slug)
+        processed_clip_host = get_app_host(g.api, CLIP_SLUG)
 
     if not processed_clip_host:
         raise ValueError("CLIP_HOST is not set and cannot be determined automatically")

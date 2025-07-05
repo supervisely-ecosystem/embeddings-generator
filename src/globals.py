@@ -52,8 +52,6 @@ else:
 
 api = sly.Api(ignore_task_id=True, token=token)
 sly.logger.debug("Connected to Supervisely API: %s", api.server_address)
-clip_slug = "supervisely-ecosystem/deploy-clip-as-service"
-projections_slug = "supervisely-ecosystem/projections_service"
 
 # region envvars
 qdrant_host = os.getenv("modal.state.qdrantHost") or os.getenv("QDRANT_HOST")
@@ -61,7 +59,7 @@ clip_host = os.getenv("modal.state.clipHost", None) or os.getenv("CLIP_HOST", No
 
 sly.logger.debug("CLIP host from environment: %s", clip_host)
 # if clip_host is None or clip_host == "":
-#     clip_host = get_app_host(api, clip_slug)
+#     clip_host = get_app_host(api, cas.CLIP_SLUG)
 
 # try:
 #     clip_host = int(clip_host)
