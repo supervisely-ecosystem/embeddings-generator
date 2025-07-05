@@ -194,38 +194,52 @@ async def _ensure_client_ready():
     # Check if client is None or not properly initialized
     if client is None:
         try:
-            sly.logger.warning("CLIP client is None, attempting to initialize...")
+            sly.logger.info("CLIP client is None, attempting to initialize...")
             client = _init_client()
+            sly.logger.info("CLIP client successfully initialized")
         except Exception as e:
             error_msg = f"Failed to initialize CLIP client: {str(e)}"
             sly.logger.error(error_msg, exc_info=True)
             raise RuntimeError(error_msg) from e
 
-    # Additional check for CasUrlClient to ensure connection is established
+    # ALWAYS check for CasUrlClient readiness, even if client exists
     if isinstance(client, CasUrlClient):
         try:
             # Test if client is ready to handle requests
             await client.client._async_client.is_flow_ready()
+            sly.logger.debug("CLIP client is ready for requests")
         except Exception as e:
-            sly.logger.warning("CLIP client flow is not ready, attempting to reinitialize...")
+            sly.logger.warning("CLIP client flow is not ready, invalidating client: %s", str(e))
+            # IMPORTANT: Set client to None immediately when it's not working
+            client = None
+            sly.logger.info("CLIP client invalidated due to flow not ready")
+
+            # Try to reinitialize, but don't fail if it doesn't work
             try:
-                # Reinitialize client - this will fetch fresh host information
+                sly.logger.info("Attempting to reinitialize CLIP client...")
                 client = _init_client()
                 sly.logger.info("CLIP client successfully reinitialized")
 
                 # Verify the new client is ready
                 if isinstance(client, CasUrlClient):
                     await client.client._async_client.is_flow_ready()
+                    sly.logger.info("Reinitialized CLIP client is ready for requests")
 
             except Exception as init_e:
-                error_msg = f"Failed to reinitialize CLIP client: {str(init_e)}"
-                sly.logger.error(error_msg, exc_info=True)
-                raise RuntimeError(error_msg) from init_e
+                sly.logger.warning(
+                    "Failed to reinitialize CLIP client, will retry on next request: %s",
+                    str(init_e),
+                )
+                # Don't raise error here - client is already None, next call will try again
+                client = None
 
 
 @timeit
 async def get_vectors(queries: List[str]) -> List[List[float]]:
     await _ensure_client_ready()
+
+    if client is None:
+        raise RuntimeError("CLIP client is not available")
 
     try:
         return await client.get_vectors(queries)
@@ -238,6 +252,9 @@ async def get_vectors(queries: List[str]) -> List[List[float]]:
 @timeit
 async def is_flow_ready():
     await _ensure_client_ready()
+
+    if client is None:
+        return False
 
     try:
         if isinstance(client, CasUrlClient):
