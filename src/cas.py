@@ -143,17 +143,93 @@ class CasUrlClient(CasClient):
 
 
 def _init_client() -> Union[CasUrlClient, CasClient]:
-    if isinstance(g.clip_host, int):
-        return CasTaskClient(
-            g.api, g.clip_host
-        )  # to switch on this mode you need to refactor processing of CLIP_HOST in globals.py
-    else:
-        return CasUrlClient(g.clip_host)
+    processed_clip_host = g.clip_host
+
+    if processed_clip_host is None or processed_clip_host == "":
+        from src.utils import get_app_host
+
+        processed_clip_host = get_app_host(g.api, g.clip_slug)
+
+    if not processed_clip_host:
+        raise ValueError("CLIP_HOST is not set and cannot be determined automatically")
+
+    try:
+        # Try to parse as task ID
+        task_id = int(processed_clip_host)
+        task_info = g.api.task.get_info_by_id(task_id)
+        try:
+            processed_clip_host = (
+                g.api.server_address + task_info["settings"]["message"]["appInfo"]["baseUrl"]
+            )
+        except KeyError:
+            sly.logger.warning("Cannot get CLIP URL from task settings")
+            raise RuntimeError("Cannot connect to CLIP Service")
+
+        return CasTaskClient(g.api, task_id)
+    except ValueError:
+        # Not a task ID, treat as URL
+        if processed_clip_host[:4] not in ["http", "ws:/", "grpc"]:
+            processed_clip_host = "grpc://" + processed_clip_host
+
+        sly.logger.info("CLIP host: %s", processed_clip_host)
+        return CasUrlClient(processed_clip_host)
 
 
-client = _init_client()
+client = None
+
+
+async def _ensure_client_ready():
+    """Ensure that the CLIP client is initialized and ready to handle requests."""
+    global client
+
+    # Check if client is None or not properly initialized
+    if client is None:
+        try:
+            sly.logger.warning("CLIP client is None, attempting to reinitialize...")
+            client = _init_client()
+        except Exception as e:
+            error_msg = f"Failed to initialize CLIP client: {str(e)}"
+            sly.logger.error(error_msg, exc_info=True)
+            raise RuntimeError(error_msg) from e
+
+    # Additional check for CasUrlClient to ensure connection is established
+    if isinstance(client, CasUrlClient):
+        try:
+            # Test if client is ready to handle requests
+            await client.client._async_client.is_flow_ready()
+        except Exception as e:
+            sly.logger.warning("CLIP client flow is not ready, attempting to reinitialize...")
+            try:
+                client = _init_client()
+            except Exception as init_e:
+                error_msg = f"Failed to reinitialize CLIP client: {str(init_e)}"
+                sly.logger.error(error_msg, exc_info=True)
+                raise RuntimeError(error_msg) from init_e
 
 
 @timeit
 async def get_vectors(queries: List[str]) -> List[List[float]]:
-    return await client.get_vectors(queries)
+    await _ensure_client_ready()
+
+    try:
+        return await client.get_vectors(queries)
+    except Exception as e:
+        error_msg = f"Failed to get vectors from CLIP service: {str(e)}"
+        sly.logger.error(error_msg, exc_info=True)
+        raise RuntimeError(error_msg) from e
+
+
+@timeit
+async def is_flow_ready():
+    await _ensure_client_ready()
+
+    try:
+        if isinstance(client, CasUrlClient):
+            return await client.client._async_client.is_flow_ready()
+        else:
+            # For CasTaskClient, assume it's ready if initialization succeeded
+            return True
+    except Exception as e:
+        error_msg = f"Failed to check flow readiness from CLIP service: {str(e)}"
+        sly.logger.error(error_msg, exc_info=True)
+        raise RuntimeError(error_msg) from e

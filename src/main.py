@@ -645,7 +645,7 @@ async def health_check():
 
         # Check CLIP service availability
         try:
-            if await cas.client.client._async_client.is_flow_ready():
+            if await cas.is_flow_ready():
                 checks["clip"] = "healthy"
             else:
                 checks["clip"] = "unhealthy: CLIP service is not ready"

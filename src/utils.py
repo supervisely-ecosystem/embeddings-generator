@@ -15,6 +15,8 @@ from supervisely.api.app_api import SessionInfo
 from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
+from src.globals import projections_slug
+
 
 class TupleFields:
     """Fields of the named tuples used in the project."""
@@ -1011,7 +1013,6 @@ def _start_projections_service(
         agent_id=None,
         module_id=module_id,
         workspace_id=workspace_id,
-        params={},  # ! TODO: remove after sly SDK release
     )
     api.app.wait(session.task_id, target_status=sly.task.Status.STARTED)
     return session
@@ -1021,18 +1022,15 @@ def _start_projections_service(
 @to_thread
 def start_projections_service(api: sly.Api, project_id: int):
     try:
-        module_info = api.app.get_ecosystem_module_info(
-            slug="supervisely-ecosystem/projections-service"
+        e_msg = ""
+        module_info = api.app.get_ecosystem_module_info(slug=projections_slug)
+    except Exception as e:
+        e_msg = f"Error: {str(e)}"
+        module_info = None
+    if module_info is None:
+        raise RuntimeError(
+            f"[Project: {project_id}] Projections service module not found in ecosystem. {e_msg}"
         )
-    except Exception:
-        sly.logger.warning(
-            f"[Project: {project_id}] Projections service module not found, trying to start legacy projections service."
-        )
-        module_info = api.app.get_ecosystem_module_info(
-            slug="546804b13d9ed54a9105b9f850c14d14/projections-service"
-        )
-        if module_info is None:
-            raise RuntimeError("Projections service module not found in ecosystem.")
     project = api.project.get_info_by_id(project_id)
     team_id = project.team_id
     workspace_id = project.workspace_id
