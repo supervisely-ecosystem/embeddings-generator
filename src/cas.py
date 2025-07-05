@@ -14,6 +14,7 @@ import src.globals as g
 from src.utils import send_request, timeit, with_retries
 
 CLIP_SLUG = "supervisely-ecosystem/deploy-clip-as-service"
+client = None
 
 
 class SlyCasClient(Client):
@@ -182,9 +183,6 @@ def _init_client() -> Union[CasUrlClient, CasClient]:
 
         sly.logger.info("Using CLIP host as URL: %s", processed_clip_host)
         return CasUrlClient(processed_clip_host)
-
-
-client = None
 
 
 async def _ensure_client_ready():

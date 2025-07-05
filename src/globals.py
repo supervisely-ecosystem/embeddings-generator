@@ -1,10 +1,7 @@
-import asyncio
 import os
 
 import supervisely as sly
 from dotenv import load_dotenv
-
-from src.utils import get_app_host
 
 if sly.is_development():
     load_dotenv(os.path.expanduser("~/supervisely.env"))
@@ -56,22 +53,6 @@ sly.logger.debug("Connected to Supervisely API: %s", api.server_address)
 # region envvars
 qdrant_host = os.getenv("modal.state.qdrantHost") or os.getenv("QDRANT_HOST")
 clip_host = os.getenv("modal.state.clipHost", None) or os.getenv("CLIP_HOST", None)
-
-
-# if clip_host is None or clip_host == "":
-#     clip_host = get_app_host(api, cas.CLIP_SLUG)
-
-# try:
-#     clip_host = int(clip_host)
-#     task_info = api.task.get_info_by_id(clip_host)
-#     try:
-#         clip_host = api.server_address + task_info["settings"]["message"]["appInfo"]["baseUrl"]
-#     except KeyError:
-#         sly.logger.warning("Cannot get CLIP URL from task settings")
-#         raise RuntimeError("Cannot connect to CLIP Service")
-# except ValueError:
-#     if clip_host[:4] not in ["http", "ws:/", "grpc"]:
-#         clip_host = "grpc://" + clip_host
 # endregion
 
 if not qdrant_host:
