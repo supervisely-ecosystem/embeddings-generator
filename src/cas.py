@@ -206,8 +206,14 @@ async def _ensure_client_ready():
     if isinstance(client, CasUrlClient):
         try:
             # Test if client is ready to handle requests
-            await client.client._async_client.is_flow_ready()
-            sly.logger.debug("CLIP client is ready for requests")
+            sly.logger.info("Ensuring CLIP client is ready for requests...")
+            result = await client.client._async_client.is_flow_ready()
+            if not result:
+                sly.logger.warning("CLIP client flow is not ready, invalidating client")
+                # IMPORTANT: Set client to None immediately when it's not working
+                client = None
+            else:
+                sly.logger.info("CLIP client is ready for requests")
         except Exception as e:
             sly.logger.warning("CLIP client flow is not ready, invalidating client: %s", str(e))
             # IMPORTANT: Set client to None immediately when it's not working
@@ -222,8 +228,13 @@ async def _ensure_client_ready():
 
                 # Verify the new client is ready
                 if isinstance(client, CasUrlClient):
-                    await client.client._async_client.is_flow_ready()
-                    sly.logger.info("Reinitialized CLIP client is ready for requests")
+                    result = await client.client._async_client.is_flow_ready()
+                    if not result:
+                        sly.logger.warning("CLIP client flow is not ready, invalidating client")
+                        # IMPORTANT: Set client to None immediately when it's not working
+                        client = None
+                    else:
+                        sly.logger.info("CLIP client is ready for requests")
 
             except Exception as init_e:
                 sly.logger.warning(
