@@ -273,6 +273,5 @@ async def is_flow_ready():
     except Exception as e:
         sly.logger.warning("CLIP flow readiness check failed in health check: %s", str(e))
         # Invalidate client when readiness check fails
-        global client
         client = None
         return False
