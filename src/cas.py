@@ -145,12 +145,15 @@ class CasUrlClient(CasClient):
 
 
 def _init_client() -> Union[CasUrlClient, CasClient]:
+    # Always fetch fresh host information on each initialization
     processed_clip_host = g.clip_host
 
     if processed_clip_host is None or processed_clip_host == "":
         from src.utils import get_app_host
 
+        sly.logger.info("CLIP host not set in environment, fetching from app host...")
         processed_clip_host = get_app_host(g.api, CLIP_SLUG)
+        sly.logger.info("Fetched CLIP host from app: %s", processed_clip_host)
 
     if not processed_clip_host:
         raise ValueError("CLIP_HOST is not set and cannot be determined automatically")
@@ -158,22 +161,26 @@ def _init_client() -> Union[CasUrlClient, CasClient]:
     try:
         # Try to parse as task ID
         task_id = int(processed_clip_host)
+        sly.logger.info("CLIP host appears to be a task ID: %s, fetching task info...", task_id)
         task_info = g.api.task.get_info_by_id(task_id)
+
         try:
             processed_clip_host = (
                 g.api.server_address + task_info["settings"]["message"]["appInfo"]["baseUrl"]
             )
+            sly.logger.info("Resolved CLIP URL from task settings: %s", processed_clip_host)
         except KeyError:
             sly.logger.warning("Cannot get CLIP URL from task settings")
             raise RuntimeError("Cannot connect to CLIP Service")
 
         return CasTaskClient(g.api, task_id)
+
     except ValueError:
         # Not a task ID, treat as URL
         if processed_clip_host[:4] not in ["http", "ws:/", "grpc"]:
             processed_clip_host = "grpc://" + processed_clip_host
 
-        sly.logger.info("CLIP host: %s", processed_clip_host)
+        sly.logger.info("Using CLIP host as URL: %s", processed_clip_host)
         return CasUrlClient(processed_clip_host)
 
 
@@ -187,7 +194,7 @@ async def _ensure_client_ready():
     # Check if client is None or not properly initialized
     if client is None:
         try:
-            sly.logger.warning("CLIP client is None, attempting to reinitialize...")
+            sly.logger.warning("CLIP client is None, attempting to initialize...")
             client = _init_client()
         except Exception as e:
             error_msg = f"Failed to initialize CLIP client: {str(e)}"
@@ -202,7 +209,14 @@ async def _ensure_client_ready():
         except Exception as e:
             sly.logger.warning("CLIP client flow is not ready, attempting to reinitialize...")
             try:
+                # Reinitialize client - this will fetch fresh host information
                 client = _init_client()
+                sly.logger.info("CLIP client successfully reinitialized")
+
+                # Verify the new client is ready
+                if isinstance(client, CasUrlClient):
+                    await client.client._async_client.is_flow_ready()
+
             except Exception as init_e:
                 error_msg = f"Failed to reinitialize CLIP client: {str(init_e)}"
                 sly.logger.error(error_msg, exc_info=True)
