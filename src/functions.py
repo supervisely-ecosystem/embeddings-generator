@@ -110,13 +110,13 @@ async def update_embeddings(
     force: bool = False,
     project_info: Optional[sly.ProjectInfo] = None,
 ):
-    collection_msg = f"[Collection: {project_id}] "
+    msg_prefix = f"[Project: {project_id}] "
 
     if project_info is None:
         project_info = await get_project_info(api, project_id)
 
     if force:
-        logger.info(f"{collection_msg} Force enabled, recreating embeddings for all images.")
+        logger.info(f"{msg_prefix} Force enabled, recreating embeddings for all images.")
         await qdrant.delete_collection(project_id)
         # do not need to create collection here, it will be created in process_images
         images_to_create = await image_get_list_async(api, project_id)
@@ -124,7 +124,7 @@ async def update_embeddings(
     elif project_info.embeddings_updated_at is None:
         # do not need to check or create collection here, it will be created in process_images
         logger.info(
-            f"{collection_msg} Embeddings are not updated yet, creating embeddings for all images."
+            f"{msg_prefix} Embeddings are not updated yet, creating embeddings for all images."
         )
         images_to_create = await image_get_list_async(api, project_id)
         images_to_delete = []
@@ -132,7 +132,7 @@ async def update_embeddings(
         project_info.updated_at
     ):
         logger.info(
-            f"{collection_msg} Embeddings are outdated, will check for images that need to be updated."
+            f"{msg_prefix} Embeddings are outdated, will check for images that need to be updated."
         )
         images_to_create = await image_get_list_async(api, project_id, wo_embeddings=True)
         if project_info.embeddings_updated_at is not None:

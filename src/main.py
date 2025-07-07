@@ -79,7 +79,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         },
     )
 
-    collection_msg = f"[Collection: {event.project_id}]"
+    msg_prefix = f"[Project: {event.project_id}]"
 
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
 
@@ -89,10 +89,17 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         sly.logger.warning(message)
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
 
-    # --------------------- Step 1: Check If Embeddings Are Already In Progress. --------------------- #
+    # ---------------------- Step 1-1: Check If Embeddings Enabled For Project. ---------------------- #
+
+    if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+        message = f"{msg_prefix} Embeddings are disabled. Skipping."
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+    # --------------------- Step 1-2: Check If Embeddings Are Already In Progress. --------------------- #
 
     if project_info.embeddings_in_progress:
-        message = f"{collection_msg} Embeddings creation is already in progress. Skipping."
+        message = f"{msg_prefix} Embeddings creation is already in progress. Skipping."
         sly.logger.info(message)
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
@@ -127,7 +134,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             images_to_delete = []
 
     if len(images_to_create) == 0 and len(images_to_delete) == 0:
-        message = f"{collection_msg} Embeddings are up to date. Skipping."
+        message = f"{msg_prefix} Embeddings are up to date. Skipping."
         sly.logger.info(message)
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
@@ -137,7 +144,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
             # ----------------------- Step 3: If Force Is True, Delete The Collection. ----------------------- #
             if event.force:
-                sly.logger.debug(f"{collection_msg} Force enabled, deleting collection.")
+                sly.logger.debug(f"{msg_prefix} Force enabled, deleting collection.")
                 await qdrant.delete_collection(event.project_id)
 
             # ---------------- Step 4: Process Images. Check And Create Collection If Needed. ---------------- #
@@ -151,7 +158,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             await set_project_embeddings_updated_at(api, event.project_id)
             if event.return_vectors:
                 sly.logger.info(
-                    f"{collection_msg} Embeddings creation has been completed. "
+                    f"{msg_prefix} Embeddings creation has been completed. "
                     f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
                 )
                 await set_embeddings_in_progress(api, event.project_id, False)
@@ -163,11 +170,11 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 )
             else:
                 await set_embeddings_in_progress(api, event.project_id, False)
-                message = f"{collection_msg} Embeddings creation has been completed."
+                message = f"{msg_prefix} Embeddings creation has been completed."
                 sly.logger.info(message)
                 return JSONResponse({ResponseFields.MESSAGE: message})
         except Exception as e:
-            message = f"{collection_msg} Error while creating embeddings: {str(e)}"
+            message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
             sly.logger.error(message, exc_info=True)
             await set_embeddings_in_progress(api, event.project_id, False)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
@@ -177,7 +184,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     g.background_tasks[task_id] = task
     return JSONResponse(
         {
-            ResponseFields.MESSAGE: f"{collection_msg} Embeddings creation started.",
+            ResponseFields.MESSAGE: f"{msg_prefix} Embeddings creation started.",
             ResponseFields.BACKGROUND_TASK_ID: task_id,
         }
     )
@@ -209,7 +216,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             },
         )
 
-        # ----------------- Step 0: Check Team Subscription Plan. ---------------- #
+        # ---------------------------- Step 0-1: Check Team Subscription Plan. --------------------------- #
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
         if not await is_team_plan_sufficient(api, project_info.team_id):
             message = (
@@ -218,9 +225,16 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             sly.logger.error(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
 
+        # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
+
+        if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+            message = f"{msg_prefix} Embeddings are disabled. Skipping."
+            sly.logger.info(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
         if await qdrant.collection_exists(event.project_id) is False:
-            message = f"{msg_prefix} Embeddings collection does not exist. Disabling..."
+            message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
             api.project.disable_embeddings(project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
@@ -389,16 +403,23 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         },
     )
 
-    # ----------------- Step 0: Check Team Subscription Plan. ---------------- #
+    # ---------------------------- Step 0-1: Check Team Subscription Plan. --------------------------- #
     project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
     if not await is_team_plan_sufficient(api, project_info.team_id):
         message = f"Team {project_info.team_id} with 'free' plan cannot use the AI search features."
         sly.logger.error(message)
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
 
-    # ----------------- Step 1: Check If Collection Exists ---------------- #
+    # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
+
+    if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+        message = f"{msg_prefix} Embeddings are disabled. Skipping."
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+    # ------------------------------ Step 1: Check If Collection Exists ------------------------------ #
     if await qdrant.collection_exists(event.project_id) is False:
-        message = f"{msg_prefix} Embeddings collection does not exist. Disabling..."
+        message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
         sly.logger.warning(message)
         api.project.disable_embeddings(project_info.id)
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
