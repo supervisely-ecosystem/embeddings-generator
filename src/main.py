@@ -73,7 +73,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     try:
         msg_prefix = f"[Project: {event.project_id}]"
         sly.logger.info(
-            f"Started creating embeddings for project {event.project_id}",
+            f"{msg_prefix} Started creating embeddings.",
             extra={
                 "force": event.force,
                 "return_vectors": event.return_vectors,
@@ -365,7 +365,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                     ):
                         results[item_id] = item
                     # If both are None or new score is lower/equal, keep existing item
-            sly.logger.info(f"{msg_prefix} Found {len(items)} similar images for a query {query}")
+            sly.logger.info(
+                f"{msg_prefix} Found {len(items)} similar images for a query '{query}'."
+            )
         # Convert back to list for further processing
         results_list = list(results.values())
         if len(results_list) == 0:

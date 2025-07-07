@@ -46,7 +46,7 @@ async def process_images(
     :rtype: Tuple[List[sly.ImageInfo], List[List[float]]]
     """
 
-    msg_prefix = f"[Project ID: {project_id}]"
+    msg_prefix = f"[Project: {project_id}]"
     vectors = []
 
     if len(to_create) == 0 and len(to_delete) == 0:
