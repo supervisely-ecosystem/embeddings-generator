@@ -162,24 +162,6 @@ def _init_client() -> Union[CasUrlClient, CasClient]:
     try:
         # Try to parse as task ID
         task_id = int(processed_clip_host)
-        sly.logger.debug("CLIP host appears to be a task ID: %s, fetching task info...", task_id)
-        task_info = g.api.task.get_info_by_id(task_id)
-
-        try:
-            processed_clip_host = (
-                g.api.server_address + task_info["settings"]["message"]["appInfo"]["baseUrl"]
-            )
-            sly.logger.debug("Resolved CLIP URL from task settings: %s", processed_clip_host)
-        except KeyError:
-            sly.logger.warning("Cannot get CLIP URL from task settings")
-            raise RuntimeError("Cannot connect to CLIP Service")
-
-        # Use the resolved URL to create CasUrlClient instead of CasTaskClient
-        sly.logger.info(
-            "Resolved CLIP host from Task ID and using it as URL: %s", processed_clip_host
-        )
-        return CasUrlClient(processed_clip_host)
-
     except ValueError:
         # Not a task ID, treat as URL
         if processed_clip_host[:4] not in ["http", "ws:/", "grpc"]:
@@ -187,6 +169,23 @@ def _init_client() -> Union[CasUrlClient, CasClient]:
 
         sly.logger.info("Using CLIP host as URL: %s", processed_clip_host)
         return CasUrlClient(processed_clip_host)
+
+    # If we reach here, processed_clip_host is a task ID
+    sly.logger.debug("CLIP host appears to be a task ID: %s, fetching task info...", task_id)
+    task_info = g.api.task.get_info_by_id(task_id)
+
+    try:
+        processed_clip_host = (
+            g.api.server_address + task_info["settings"]["message"]["appInfo"]["baseUrl"]
+        )
+        sly.logger.debug("Resolved CLIP URL from task settings: %s", processed_clip_host)
+    except Exception as e:
+        sly.logger.warning("Cannot get CLIP URL from task settings", exc_info=True)
+        raise RuntimeError("Cannot connect to CLIP Service")
+
+    # Use the resolved URL to create CasUrlClient instead of CasTaskClient
+    sly.logger.info("Resolved CLIP host from Task ID and using it as URL: %s", processed_clip_host)
+    return CasUrlClient(processed_clip_host)
 
 
 async def _ensure_client_ready():
@@ -262,18 +261,21 @@ async def get_vectors(queries: List[str]) -> List[List[float]]:
         return await client.get_vectors(queries)
     except Exception as e:
         # Try to reinitialize the client
-        sly.logger.warning("Error during get_vectors, attempting to reinitialize client: %s", str(e))
+        sly.logger.warning(
+            "Error during get_vectors, attempting to reinitialize client: %s", str(e)
+        )
         try:
             await _ensure_client_ready()
             if client is not None:
                 return await client.get_vectors(queries)
         except Exception as reinit_e:
             sly.logger.error("Failed to reinitialize client: %s", str(reinit_e))
-        
+
         # If reinitialization fails - raise the original error
         error_msg = f"Failed to get vectors from CLIP service: {str(e)}"
         sly.logger.error(error_msg, exc_info=True)
         raise RuntimeError(error_msg) from e
+
 
 @timeit
 async def is_flow_ready():
