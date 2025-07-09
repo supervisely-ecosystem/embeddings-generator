@@ -187,7 +187,7 @@ def _init_client() -> Union[CasUrlClient, CasClient]:
     sly.logger.info("Resolved CLIP host from Task ID and using it as URL: %s", processed_clip_host)
     return CasUrlClient(processed_clip_host)
 
-
+@timeit
 async def _ensure_client_ready():
     """Ensure that the CLIP client is initialized and ready to handle requests."""
     global client

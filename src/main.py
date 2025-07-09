@@ -377,7 +377,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
     except Exception as e:
         sly.logger.error(f"{msg_prefix} Error during search: {str(e)}", exc_info=True)
-        return JSONResponse({ResponseFields.MESSAGE: f"Search failed: {str(e)}"})
+        return JSONResponse({ResponseFields.MESSAGE: f"Search failed: {str(e)}"}, status_code=500)
 
 
 @app.event(Event.Diverse, use_state=True)

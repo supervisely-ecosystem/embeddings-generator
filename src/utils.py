@@ -17,6 +17,8 @@ from supervisely.api.entities_collection_api import (CollectionItem,
 from supervisely.api.module_api import ApiField
 
 PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
+projections_task_map = {}
+
 
 class TupleFields:
     """Fields of the named tuples used in the project."""
@@ -1034,6 +1036,50 @@ def start_projections_service(api: sly.Api, project_id: int):
     project = api.project.get_info_by_id(project_id)
     team_id = project.team_id
     workspace_id = project.workspace_id
+
+    # Check if the task is already in projections_task_map
+    if team_id in projections_task_map:
+        task_ids = projections_task_map[team_id]
+        for task_id in task_ids:
+            task_status = api.task.get_status(task_id)
+            if task_status == api.task.Status.STARTED:
+                return task_id
+            elif task_status == api.task.Status.QUEUED:
+                task_info = api.task.get_info_by_id(task_id)
+
+                if task_info.meta.get("retries", 0) == 0:
+                    created_at = parse_timestamp(task_info.created_at)
+                    elapsed_time = (
+                        datetime.datetime.now(datetime.timezone.utc) - created_at
+                    ).total_seconds()
+
+                    if elapsed_time > 120:  # Task created more than 2 minutes ago
+                        projections_task_map[team_id].remove(task_id)
+                    else:  # Task created less than 2 minutes ago
+                        # Wait 10 seconds for the task to start
+                        try:
+                            api.app.wait(
+                                task_id,
+                                target_status=api.task.Status.STARTED,
+                                attempts=1,
+                                attempt_delay_sec=20,
+                            )
+                            if api.app.wait_until_ready_for_api_calls(task_id):
+                                return task_id
+                        except Exception as e:
+                            sly.logger.debug(f"Error waiting for task {task_id} to start: {str(e)}")
+                            # If the task is still not started, remove it from the map
+                            projections_task_map[team_id].remove(task_id)
+                            continue
+                        else:
+                            # If the task started, return its ID
+                            return task_id
+
+    # If no task is found, start a new projections service
+    sly.logger.debug(
+        f"[Project: {project_id}] Starting Projections service for team ID {team_id}."
+    )
+
     sessions = api.app.get_sessions(team_id, module_info.id, statuses=[api.task.Status.STARTED])
     me = api.user.get_my_info()
     sessions = [s for s in sessions if s.user_id == me.id]
@@ -1049,6 +1095,12 @@ def start_projections_service(api: sly.Api, project_id: int):
         ready = api.app.wait_until_ready_for_api_calls(session.task_id)
         if not ready:
             raise RuntimeError("Projections service is not ready for API calls after restart")
+
+    # Add the task to projections_task_map
+    if projections_task_map.get(team_id, None) is None:
+        projections_task_map[team_id] = []
+    projections_task_map[team_id].append(session.task_id)
+
     return session.task_id
 
 
