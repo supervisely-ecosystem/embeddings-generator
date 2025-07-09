@@ -50,7 +50,7 @@ async def process_images(
     vectors = []
 
     if len(to_create) == 0 and len(to_delete) == 0:
-        logger.debug(f"{msg_prefix} Embeddings are up-to-date.")
+        logger.debug(f"{msg_prefix} Nothing to update.")
         return to_create, vectors
 
     to_create = await create_lite_image_infos(

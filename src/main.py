@@ -92,7 +92,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         # ---------------------- Step 1-1: Check If Embeddings Enabled For Project. ---------------------- #
 
         if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
-            message = f"{msg_prefix} Embeddings are disabled. Skipping."
+            message = f"{msg_prefix} AI Search is disabled. Skipping."
             sly.logger.info(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
@@ -134,7 +134,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 images_to_delete = []
 
         if len(images_to_create) == 0 and len(images_to_delete) == 0:
-            message = f"{msg_prefix} Embeddings are up to date. Skipping."
+            message = f"{msg_prefix} Nothing to update. Skipping."
             sly.logger.info(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
@@ -142,7 +142,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             try:
                 # ----------------------- Step 3: If Force Is True, Delete The Collection. ----------------------- #
                 if event.force:
-                    sly.logger.debug(f"{msg_prefix} Force enabled, deleting collection.")
+                    sly.logger.debug(f"{msg_prefix} Force enabled, deleting qdrant collection.")
                     await qdrant.delete_collection(event.project_id)
 
                 # ---------------- Step 4: Process Images. Check And Create Collection If Needed. ---------------- #
@@ -231,7 +231,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
 
         if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
-            message = f"{msg_prefix} Embeddings are disabled. Skipping."
+            message = f"{msg_prefix} AI Searhc is disabled. Skipping."
             sly.logger.info(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
@@ -421,7 +421,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
 
         if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
-            message = f"{msg_prefix} Embeddings are disabled. Skipping."
+            message = f"{msg_prefix} AI Search is disabled. Skipping."
             sly.logger.info(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
