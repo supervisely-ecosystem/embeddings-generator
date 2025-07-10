@@ -1,67 +1,86 @@
 <div align="center" markdown>
 
-<img src="https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/poster.jpg">
+<img src="https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/poster.jpg" alt="Embeddings Generator Poster"/>
 
 # Embeddings Generator
 
-**Microservice for generating embeddings using CLIP as Service and storing them in Qdrant vector database**
-
 <p align="center">
-  <a href="#Overview">Overview</a> •
-    <a href="#How-To-Run">How To Run</a> •
-    <a href="#How-To-Use">How To Use</a> •
-    <a href="#API-Endpoints">API Endpoints</a>
+  <a href="#overview">Overview</a> •
+  <a href="#deployment">Deployment</a> •
+  <a href="#api-endpoints">API Endpoints</a>  •
+  <a href="#using-ai-search">Using AI Search</a>
 </p>
 
 [![](https://img.shields.io/badge/supervisely-ecosystem-brightgreen)](https://ecosystem.supervisely.com/apps/supervisely-ecosystem/embeddings-generator)
 [![](https://img.shields.io/badge/slack-chat-green.svg?logo=slack)](https://supervisely.com/slack)
-![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/supervisely-ecosystem/embeddings-generator)
-[![views](https://app.supervisely.com/img/badges/views/supervisely-ecosystem/embeddings-generator.png)](https://supervisely.com)
-[![runs](https://app.supervisely.com/img/badges/runs/supervisely-ecosystem/embeddings-generator.png)](https://supervisely.com)
 
 </div>
 
-## Overview
+# Overview
 
-Embeddings Generator is a headless Supervisely microservice that provides high-performance vector embeddings generation for images using CLIP (Contrastive Language-Image Pre-Training) technology. The service automatically generates embeddings for project images and stores them in Qdrant vector database, enabling powerful semantic search, similarity analysis, and diverse image selection capabilities.
+🧩 **Embeddings Generator** is a **system-level microservice** designed to power the **AI Search** feature in Supervisely by providing high-performance vector embeddings generation for images using CLIP (Contrastive Language-Image Pre-Training) technology.
 
-The service operates as a background microservice and integrates seamlessly with Supervisely ecosystem, providing RESTful API endpoints for embeddings generation, semantic search, and advanced image analysis workflows.
+Key features:
 
-### Key Features
+-   **Instance-level service**: Runs as a system container for the entire Supervisely instance.
+-   **RESTful API**: Provides HTTP endpoints for embeddings generation and semantic search.
+-   **CLIP Service integration**: High-quality image embeddings using state-of-the-art CLIP models.
+-   **Qdrant integration**: Efficient vector database for embedding storage and retrieval.
+-   **Semantic search capabilities**: Text-to-image and image-to-image search functionality.
+-   **Diverse selection**: Advanced clustering algorithms for selecting diverse image subsets.
+-   **Zero-downtime operation**: Runs continuously in the background as a headless service.
 
-- **Text-to-Image Search**: Find images using natural language descriptions.
-- **Image-to-Image Search**: Discover visually similar images in your dataset.
-- **Hybrid Search**: Combine text prompts and reference images for precise results.
-- **Diverse Selection**: Use clustering algorithms to select diverse image subsets.
+The service enables powerful AI-driven image analysis workflows:
 
-### Core Technologies
+1. **Text-to-Image Search**: Find images using natural language descriptions.
+2. **Image-to-Image Search**: Discover visually similar images in datasets.
+3. **Hybrid Search**: Combine text prompts and reference images for precise results.
+4. **Diverse Selection**: Use clustering algorithms to select diverse image subsets.
 
-- **CLIP as Service**: Utilizes state-of-the-art CLIP models for generating high-quality image embeddings.
-- **Qdrant Vector Database**: Efficiently stores and manages embeddings for high-performance retrieval.
-- **Supervisely Ecosystem**: Integrates with Supervisely platform for seamless project management
-- **RESTful API**: Provides simple HTTP endpoints for easy integration with external systems and workflows.
-- **Background Processing**: Runs as a headless service with automatic updating of embeddings as new images are added to projects.
+## Architecture
 
-## How To Run
+The application uses a containerized microservice architecture with RESTful API endpoints:
 
-**Prerequisites:**
+-   **Containerized Service**: Runs as a Docker container at the instance level.
+-   **CLIP Service**: Generates high-quality embeddings using CLIP models.
+-   **Qdrant Integration**: Efficiently stores and manages vector embeddings.
+-   **RESTful API**: Simple HTTP endpoints for easy integration with external systems.
+-   **Background Processing**: Headless service with automatic embedding management.
+-   **Multi-project Support**: Handles multiple projects concurrently.
 
-- Supervisely instance with admin access
-- Running CLIP as Service instance (task ID)
-- Qdrant vector database instance (URL)
-- Recommended: Run the Embeddings Auto-Updater app to keep embeddings up-to-date automatically.
+## Deployment
 
-When launching the service, configure these settings in the modal dialog:
+### Prerequisites
 
-1. **Qdrant DB**: Full URL including protocol (https/http) and port.
-2. **CLIP Service**: Task ID for CLIP as Service session.
-3. **Change App availability** to "Whole Instance" to make it accessible for all projects. If you forget to do this, you can change it later in the app session settings.
+-   Supervisely instance with admin access.
+-   Docker environment for container deployment.
+-   Running CLIP as Service instance (task ID or service endpoint).
+-   Qdrant vector database instance (URL).
 
-After configuration, click "Run" to deploy the service. The application will start in headless mode and will be available for all projects in your Supervisely instance.
+### Environment Variables
 
-![How To Run](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/how_to_run.jpg)
+Configure the service using the environment variables in `docker-compose.yml`.
 
-## How To Use
+### Configuration
+
+-   **Qdrant DB**: Full URL including protocol (https/http) and port (e.g., `https://192.168.1.1:6333`).
+-   **CLIP Service**: Task ID for CLIP as Service session or its host including port (e.g., `1234` or `https://192.168.1.1:51000`).
+
+The service starts automatically on instance startup and provides API endpoints for all projects in the Supervisely instance.
+
+**Recommended**: Deploy alongside the [Embeddings Auto-Updater](https://github.com/supervisely-ecosystem/embeddings-auto-updater) service to keep embeddings up-to-date automatically.
+
+## API Endpoints
+
+The service provides three main API endpoints:
+
+1. `/embeddings` - Generate or update embeddings for project images.
+
+2. `/search` - Semantic search for similar images using text prompts or reference images.
+
+3. `/diverse` - Select diverse images using clustering algorithms.
+
+## Using AI Search
 
 For each project, you want to use the AI Search feature you need to enable this feature:
 
@@ -79,11 +98,11 @@ Once embeddings are generated, you can use the semantic search and diverse selec
 
 **Semantic Search**
 
-- Use text prompts to find similar images in your project:
+-   Use text prompts to find similar images in your project:
 
 ![Prompt](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/prompt.jpg)
 
-- Use reference images to find visually similar images:
+-   Use reference images to find visually similar images:
 
 | Select Reference Images                                                                                                      | Results                                                                                                                      |
 | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -98,63 +117,6 @@ When results are returned, you can see the confidence scores for each image, ind
 Use clustering algorithms to select diverse images from your project:
 
 ![Diverse Selection](https://github.com/supervisely-ecosystem/embeddings-generator/releases/download/v0.1.0/diverse.jpg)
-
-## API Endpoints
-
-The service provides three main API endpoints:
-
-### `/embeddings` - Generate Embeddings
-
-Generate or update embeddings for project images.
-
-**Examples:**
-
-```python
-# Generate embeddings for all images in project
-data = {"project_id": 12345, "team_id": 67890}
-api.task.send_request(task_id, "embeddings", data)
-```
-
-### `/search` - Semantic Search
-
-Search for similar images using text prompts or reference images.
-
-**Examples:**
-
-```python
-# Text-to-image search
-data = {"project_id": 12345, "limit": 50, "prompt": "red car"}
-response = api.task.send_request(task_id, "search", data)
-
-# Image-to-image search
-data = {"project_id": 12345, "limit": 20, "image_ids": [101, 102]}
-response = api.task.send_request(task_id, "search", data)
-
-# Hybrid search (text + images)
-data = {
-    "project_id": 12345,
-    "limit": 30,
-    "prompt": "sports car",
-    "image_ids": [101]
-}
-response = api.task.send_request(task_id, "search", data)
-```
-
-### `/diverse` - Diverse Selection
-
-Select diverse images using clustering algorithms.
-
-**Examples:**
-
-```python
-# K-means diverse selection
-data = {"project_id": 12345, "clustering_method": "kmeans", "sampling_method": "random", "sample_size": 10}
-response = api.task.send_request(task_id, "diverse", data)
-
-# Random diverse selection
-data = {"project_id": 12345, "clustering_method": "dbscan", "sampling_method": "centroids", "sample_size": 10}
-response = api.task.send_request(task_id, "diverse", data)
-```
 
 ---
 

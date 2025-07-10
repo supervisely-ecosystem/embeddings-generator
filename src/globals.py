@@ -51,8 +51,8 @@ api = sly.Api(ignore_task_id=True, token=token)
 sly.logger.debug("Connected to Supervisely API: %s", api.server_address)
 
 # region envvars
-qdrant_host = os.getenv("modal.state.qdrantHost") or os.getenv("QDRANT_HOST")
-clip_host = os.getenv("modal.state.clipHost", None) or os.getenv("CLIP_HOST", None)
+qdrant_host = os.getenv("QDRANT_HOST")
+clip_host = os.getenv("CLIP_HOST", None)
 # endregion
 
 if not qdrant_host:

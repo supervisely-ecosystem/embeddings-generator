@@ -24,5 +24,4 @@ source .venv/bin/activate && \
 # Installing requirements from requirements.txt.
 echo "Install dev_requirements..." && \
 pip3 install -r dev_requirements.txt && \
-echo "Requirements have been successfully installed, VENV ready." && \
-deactivate
+echo "Requirements have been successfully installed, VENV ready."

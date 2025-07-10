@@ -1076,9 +1076,7 @@ def start_projections_service(api: sly.Api, project_id: int):
                             return task_id
 
     # If no task is found, start a new projections service
-    sly.logger.debug(
-        f"[Project: {project_id}] Starting Projections service for team ID {team_id}."
-    )
+    sly.logger.debug(f"[Project: {project_id}] Starting Projections service for team ID {team_id}.")
 
     sessions = api.app.get_sessions(team_id, module_info.id, statuses=[api.task.Status.STARTED])
     me = api.user.get_my_info()
@@ -1090,7 +1088,7 @@ def start_projections_service(api: sly.Api, project_id: int):
 
     ready = api.app.wait_until_ready_for_api_calls(session.task_id)
     if not ready:
-        sly.logger.info("Restarting Projections service...")
+        sly.logger.debug(f"[Project: {project_id}] Restarting Projections service...")
         session = _start_projections_service(api, module_info.id, workspace_id)
         ready = api.app.wait_until_ready_for_api_calls(session.task_id)
         if not ready:

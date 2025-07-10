@@ -24,6 +24,9 @@ from supervisely.app.widgets import (
 dotenv.load_dotenv(os.path.expanduser("~/supervisely.env"))
 dotenv.load_dotenv("local.env")
 
+# ! SHOULD BE REFACTORED TO SEND REQUESTS TO CONTEINERIZED SERVICE
+# ! THIS IS AN OLD IMPLEMENTATION TO USE SERVICE AS A TASK
+
 api = sly.Api()
 
 
