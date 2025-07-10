@@ -141,7 +141,7 @@ class CasUrlClient(CasClient):
         :return: List of vectors.
         :rtype: List[np.ndarray]
         """
-        vectors = await self.client.aencode(queries)
+        vectors = await self.client.aencode(queries, show_progress=True)
         return vectors.tolist()
 
 
@@ -186,6 +186,7 @@ def _init_client() -> Union[CasUrlClient, CasClient]:
     # Use the resolved URL to create CasUrlClient instead of CasTaskClient
     sly.logger.info("Resolved CLIP host from Task ID and using it as URL: %s", processed_clip_host)
     return CasUrlClient(processed_clip_host)
+
 
 @timeit
 async def _ensure_client_ready():

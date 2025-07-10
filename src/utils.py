@@ -445,8 +445,9 @@ async def create_lite_image_infos(
             id=image_info.id,
             dataset_id=image_info.dataset_id,
             full_url=image_info.link or image_info.full_storage_url,
-            cas_url=resize_image_url(
-                image_info.link or image_info.full_storage_url,
+            cas_url=image_info.link
+            or resize_image_url(
+                image_info.full_storage_url,
                 method="fit",
                 width=cas_size,
                 height=cas_size,
