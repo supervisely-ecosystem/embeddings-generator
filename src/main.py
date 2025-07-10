@@ -483,10 +483,11 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         for label, sample in samples.items():
             result.extend([image_infos[i] for i in sample])
 
-        sly.logger.debug(f"{msg_prefix} Generated {len(result)} diverse images.")
-
         if len(result) == 0:
+            sly.logger.debug(f"{msg_prefix} No diverse images found.")
             return JSONResponse({ResponseFields.MESSAGE: "No diverse images found."})
+
+        sly.logger.info(f"{msg_prefix} Generated {len(result)} diverse images.")
 
         collection_manager = DiverseCollectionManager(api, event.project_id)
         collection_id = await collection_manager.save(result)
