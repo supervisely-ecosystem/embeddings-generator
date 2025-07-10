@@ -22,6 +22,7 @@ from src.utils import (
     ImageInfoLite,
     ResponseFields,
     ResponseStatus,
+    clean_image_embeddings_updated_at,
     create_lite_image_infos,
     embeddings_up_to_date,
     get_project_info,
@@ -239,6 +240,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         if await qdrant.collection_exists(event.project_id) is False:
             message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
+            await clean_image_embeddings_updated_at(api, project_info.id)
             api.project.disable_embeddings(project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
@@ -429,6 +431,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
         if await qdrant.collection_exists(event.project_id) is False:
             message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
+            await clean_image_embeddings_updated_at(api, project_info.id)
             api.project.disable_embeddings(project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 

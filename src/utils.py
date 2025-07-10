@@ -12,8 +12,7 @@ from typing import Callable, Dict, List, Optional, Union
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
 from supervisely.api.app_api import SessionInfo
-from supervisely.api.entities_collection_api import (CollectionItem,
-                                                     CollectionType)
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
@@ -1143,3 +1142,44 @@ def get_app_host(api: sly.Api, slug: str) -> str:
     host = api.server_address.rstrip("/") + "/net/" + session_token
     sly.logger.debug("App host URL for CLIP: %s", host)
     return host
+
+
+@to_thread
+def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
+    """Set embeddings updated at timestamp to None for all images in the project."""
+    try:
+        sly.logger.debug(
+            f"[Project: {project_id}] Starting to set embeddings updated at to None for images."
+        )
+        datasets = api.dataset.get_list(project_id=project_id, recursive=True)
+        if len(datasets) == 0:
+            return
+        dataset_ids = []
+        for dataset in datasets:
+            if dataset.images_count != 0 or dataset.items_count != 0:
+                dataset_ids.append(dataset.id)
+                continue
+        if len(dataset_ids) == 0:
+            return
+        try:
+            image_ids = []
+            for dataset_id in dataset_ids:
+                sly.logger.debug(
+                    f"[Project: {project_id}] Getting images for dataset ID {dataset_id}"
+                )
+                image_ids.extend([image.id for image in api.image.get_list(dataset_id=dataset_id)])
+            timestamps = [None] * len(image_ids)
+        except Exception as e:
+            sly.logger.warning(
+                f"[Project: {project_id}] Failed to get images for dataset ID {dataset_id}: {e}"
+            )
+            return
+        api.image.set_embeddings_updated_at(ids=image_ids, timestamps=timestamps)
+        sly.logger.debug(
+            f"[Project: {project_id}] Set embeddings updated at to None for images successfully."
+        )
+    except Exception as e:
+        sly.logger.error(
+            f"[Project: {project_id}] Failed to set embeddings updated at to None for images: {e}",
+            exc_info=True,
+        )
