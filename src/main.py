@@ -640,15 +640,25 @@ async def check_task_status(request: Request):
     try:
         req_data = await request.json()
         task_id = req_data.get("task_id")  # project_id
+        if not task_id:
+            return JSONResponse(
+                {
+                    ResponseFields.STATUS: ResponseStatus.ERROR,
+                    ResponseFields.MESSAGE: "Task ID is required",
+                },
+                status_code=400,
+            )
+        else:
+            task_id = int(task_id)
 
-        if not task_id or task_id not in g.background_tasks:
+        if task_id not in g.background_tasks:
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.NOT_FOUND,
                     ResponseFields.MESSAGE: f"[Project: {task_id}] Processing task not found",
                 }
             )
-        task_id = str(task_id)  # Ensure task_id is a string
+
         task = g.background_tasks[task_id]
 
         if task.done():
