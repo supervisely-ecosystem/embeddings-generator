@@ -164,6 +164,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     )
                     await set_embeddings_in_progress(api, event.project_id, False)
                     await clear_update_flag(api, event.project_id)
+                    g.background_tasks.pop(int(event.project_id), None)
                     return JSONResponse(
                         {
                             ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
@@ -173,6 +174,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 else:
                     await set_embeddings_in_progress(api, event.project_id, False)
                     await clear_update_flag(api, event.project_id)
+                    g.background_tasks.pop(int(event.project_id), None)
                     message = f"{msg_prefix} Embeddings creation has been completed."
                     sly.logger.info(message)
                     return JSONResponse({ResponseFields.MESSAGE: message})
@@ -180,19 +182,16 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
                 sly.logger.error(message, exc_info=True)
                 await set_embeddings_in_progress(api, event.project_id, False)
+                await clear_update_flag(api, event.project_id)
+                g.background_tasks.pop(int(event.project_id), None)
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
         await set_embeddings_in_progress(api, event.project_id, True)
         await set_update_flag(api, event.project_id)
-        task_id = f"{event.project_id}"
-        task = asyncio.create_task(execute())
-        g.background_tasks[task_id] = task
-        return JSONResponse(
-            {
-                ResponseFields.MESSAGE: f"{msg_prefix} Embeddings creation started.",
-                ResponseFields.BACKGROUND_TASK_ID: task_id,
-            }
-        )
+        asyncio.create_task(execute())
+        task_id = int(event.project_id)
+        g.background_tasks[task_id] = True
+        return JSONResponse({ResponseFields.MESSAGE: f"{msg_prefix} Embeddings creation started."})
     except Exception as e:
         message = f"{msg_prefix} Error during embeddings creation: {str(e)}"
         sly.logger.error(message, exc_info=True)
