@@ -5,7 +5,6 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from functools import partial, wraps
 from time import perf_counter
 from typing import Callable, Dict, List, Optional, Union
@@ -1196,8 +1195,8 @@ def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
 @timeit
 def set_update_flag(api: sly.Api, project_id: int):
     custom_data = api.project.get_custom_data(project_id)
-    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = datetime.now(
-        timezone.utc
+    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = datetime.datetime.now(
+        datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     api.project.update_custom_data(project_id, custom_data, silent=True)
 
