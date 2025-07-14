@@ -641,10 +641,12 @@ async def check_task_status(request: Request):
         req_data = await request.json()
         task_id = req_data.get("task_id")  # project_id
         if not task_id:
+            message = "Task ID is required"
+            sly.logger.debug(message)
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.ERROR,
-                    ResponseFields.MESSAGE: "Task ID is required",
+                    ResponseFields.MESSAGE: message,
                 },
                 status_code=400,
             )
@@ -652,34 +654,32 @@ async def check_task_status(request: Request):
             task_id = int(task_id)
 
         if task_id not in g.background_tasks:
+            message = f"[Project: {task_id}] Processing task not found"
+            sly.logger.debug(message)
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.NOT_FOUND,
-                    ResponseFields.MESSAGE: f"[Project: {task_id}] Processing task not found",
+                    ResponseFields.MESSAGE: message,
                 }
             )
-
-        task = g.background_tasks[task_id]
-
-        if task.done():
-            # Get the result and clean up
-            result = task.result()
-            # Optionally remove the task from active_tasks to free memory
-            # del g.active_tasks[task_id]  # Uncomment if you want to clean up
-            return JSONResponse(
-                {ResponseFields.STATUS: ResponseStatus.COMPLETED, ResponseFields.RESULT: result}
-            )
         else:
+            message = f"[Project: {task_id}] Task is still running"
+            sly.logger.debug(message)
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.IN_PROGRESS,
-                    ResponseFields.MESSAGE: f"[Project: {task_id}] Task is still running",
+                    ResponseFields.MESSAGE: message,
                 }
             )
 
     except Exception as e:
+        message = f"[Project: {task_id}] Error checking task status: {str(e)}"
+        sly.logger.debug(message, exc_info=True)
         return JSONResponse(
-            {ResponseFields.STATUS: ResponseStatus.ERROR, ResponseFields.MESSAGE: str(e)}
+            {
+                ResponseFields.STATUS: ResponseStatus.ERROR,
+                ResponseFields.MESSAGE: message,
+            },
         )
 
 
