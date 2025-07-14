@@ -5,6 +5,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import partial, wraps
 from time import perf_counter
 from typing import Callable, Dict, List, Optional, Union
@@ -125,6 +126,12 @@ class ResponseStatus:
     ERROR = "error"
     IN_PROGRESS = "in_progress"
     NOT_FOUND = "not_found"
+
+
+class CustomDataFields:
+    """Fields of the custom data."""
+
+    EMBEDDINGS_UPDATE_STARTED_AT = "embeddings_update_started_at"
 
 
 @dataclass
@@ -1183,3 +1190,24 @@ def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
             f"[Project: {project_id}] Failed to set embeddings updated at to None for images: {e}",
             exc_info=True,
         )
+
+
+@to_thread
+@timeit
+def set_update_flag(api: sly.Api, project_id: int):
+    custom_data = api.project.get_custom_data(project_id)
+    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = datetime.now(
+        timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    api.project.update_custom_data(project_id, custom_data, silent=True)
+
+
+@to_thread
+@timeit
+def clear_update_flag(api: sly.Api, project_id: int):
+    custom_data = api.project.get_custom_data(project_id)
+    if custom_data is None or custom_data == {}:
+        return
+    if CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT in custom_data:
+        del custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT]
+        api.project.update_custom_data(project_id, custom_data, silent=True)

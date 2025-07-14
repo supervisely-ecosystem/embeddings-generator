@@ -23,6 +23,7 @@ from src.utils import (
     ResponseFields,
     ResponseStatus,
     clean_image_embeddings_updated_at,
+    clear_update_flag,
     create_lite_image_infos,
     embeddings_up_to_date,
     get_project_info,
@@ -32,6 +33,7 @@ from src.utils import (
     send_request,
     set_embeddings_in_progress,
     set_project_embeddings_updated_at,
+    set_update_flag,
     start_projections_service,
     timeit,
 )
@@ -161,6 +163,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                         f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
                     )
                     await set_embeddings_in_progress(api, event.project_id, False)
+                    await clear_update_flag(api, event.project_id)
                     return JSONResponse(
                         {
                             ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
@@ -169,6 +172,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     )
                 else:
                     await set_embeddings_in_progress(api, event.project_id, False)
+                    await clear_update_flag(api, event.project_id)
                     message = f"{msg_prefix} Embeddings creation has been completed."
                     sly.logger.info(message)
                     return JSONResponse({ResponseFields.MESSAGE: message})
@@ -179,6 +183,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
         await set_embeddings_in_progress(api, event.project_id, True)
+        await set_update_flag(api, event.project_id)
         task_id = f"{event.project_id}"
         task = asyncio.create_task(execute())
         g.background_tasks[task_id] = task
