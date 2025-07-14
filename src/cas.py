@@ -73,7 +73,7 @@ class SlyCasClient(Client):
     def _iter_doc(
         self, content, results: Optional["DocumentArray"] = None
     ) -> Generator["Document", None, None]:
-        from docarray import Document
+        """Differs from the base class method by handling Supervisely remote URLs."""
 
         for c in content:
             if isinstance(c, str):
