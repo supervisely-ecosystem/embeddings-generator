@@ -511,6 +511,9 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
     # TODO: Remove this response to implement clustering.
     return JSONResponse({ResponseFields.MESSAGE: "Clustering are not supported yet."})
+
+    msg_prefix = f"[Project: {event.project_id}]"
+    
     sly.logger.info(
         f"Generating clusters for project {event.project_id}.",
         extra={
@@ -529,9 +532,17 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
     data = {"vectors": vectors, "reduce": True}
     if event.reduction_dimensions:
         data["reduction_dimensions"] = event.reduction_dimensions
+
+    try:
+        projections_service_task_id = await start_projections_service(api, event.project_id)
+    except Exception as e:
+        message = f"{msg_prefix} Failed to start projections service: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
     labels = await send_request(
         api,
-        g.projections_service_task_id,
+        projections_service_task_id,
         "clusters",
         data=data,
         timeout=60 * 5,

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import supervisely as sly
+from fastapi.responses import JSONResponse
 from supervisely.api.file_api import FileInfo
 
 import src.globals as g
@@ -12,6 +13,7 @@ from src.pointcloud import download as download_pcd
 from src.pointcloud import upload as upload_pcd
 from src.utils import (
     ImageInfoLite,
+    ResponseFields,
     get_dataset_by_name,
     get_lite_image_infos,
     get_or_create_dataset,
@@ -22,6 +24,7 @@ from src.utils import (
     get_team_file_info,
     parse_timestamp,
     send_request,
+    start_projections_service,
     timeit,
 )
 
@@ -46,6 +49,9 @@ def get_projections_pcd_name():
 async def create_projections(
     api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
 ) -> Tuple[List[ImageInfoLite], List[List[float]]]:
+
+    msg_prefix = f"[Project: {project_id}]"
+
     if image_ids is None:
         image_infos = await get_lite_image_infos(
             api, cas_size=g.IMAGE_SIZE_FOR_CLIP, project_id=project_id, dataset_id=dataset_id
@@ -59,9 +65,17 @@ async def create_projections(
     image_infos_result, vectors = await qdrant.get_items_by_id(
         qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
     )
+
+    try:
+        projections_service_task_id = await start_projections_service(api, project_id)
+    except Exception as e:
+        message = f"{msg_prefix} Failed to start projections service: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
     projections = await send_request(
         api,
-        g.projections_service_task_id,
+        projections_service_task_id,
         "projections",
         data={"vectors": vectors, "method": "umap"},
         timeout=60 * 5,
