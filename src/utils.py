@@ -608,7 +608,7 @@ async def image_get_list_async(
     project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
-    per_page: int = 500,
+    per_page: int = 1000,
     wo_embeddings: Optional[bool] = False,
     deleted_after: Optional[str] = None,
 ) -> List[sly.ImageInfo]:
@@ -668,36 +668,32 @@ async def image_get_list_async(
             if ApiField.FILTER not in page_data:
                 page_data[ApiField.FILTER] = []
             page_data[ApiField.FILTER].extend(ids_filter)
-        page_data[ApiField.PAGE] = 1
-
-        async with semaphore:
-            response = await api.post_async(method, page_data)
-            response_json = response.json()
-
-            pages_count = response_json["pagesCount"]
-
-            batch_items = []
-            # Process first page
-            for item in response_json.get("entities", []):
-                image_info = api.image._convert_json_info(item)
-                batch_items.append(image_info)
-
-            # Get remaining pages if they exist
-            page_tasks = []
-            if pages_count > 1:
-                for page in range(2, pages_count + 1):
-                    page_data_copy = page_data.copy()
-                    page_data_copy[ApiField.PAGE] = page
-                    page_tasks.append(api.post_async(method, page_data_copy))
-
-                responses = await asyncio.gather(*page_tasks)
-                for resp in responses:
-                    resp_json = resp.json()
-                    for item in resp_json.get("entities", []):
-                        image_info = api.image._convert_json_info(item)
-                        batch_items.append(image_info)
-
-            return batch_items
+        
+        batch_items = []
+        page = 1
+        
+        while True:
+            page_data[ApiField.PAGE] = page
+            
+            async with semaphore:
+                response = await api.post_async(method, page_data)
+                response_json = response.json()
+                
+                entities = response_json.get("entities", [])
+                if not entities:
+                    break
+                    
+                for item in entities:
+                    image_info = api.image._convert_json_info(item)
+                    batch_items.append(image_info)
+                
+                # Check if there are more pages
+                if page >= response_json.get("pagesCount", 1):
+                    break
+                    
+                page += 1
+        
+        return batch_items
 
     if image_ids is None:
         # If no image IDs specified, get all images
