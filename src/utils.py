@@ -3,7 +3,6 @@ import base64
 import datetime
 import hashlib
 import json
-import random
 import uuid
 from dataclasses import dataclass
 from functools import partial, wraps
@@ -12,9 +11,12 @@ from typing import Callable, Dict, List, Optional, Union
 
 import supervisely as sly
 from supervisely._utils import batched, resize_image_url
+from supervisely.api.app_api import SessionInfo
 from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
-from supervisely.api.app_api import SessionInfo
+
+PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
+projections_task_map = {}
 
 
 class TupleFields:
@@ -123,6 +125,12 @@ class ResponseStatus:
     ERROR = "error"
     IN_PROGRESS = "in_progress"
     NOT_FOUND = "not_found"
+
+
+class CustomDataFields:
+    """Fields of the custom data."""
+
+    EMBEDDINGS_UPDATE_STARTED_AT = "embeddings_update_started_at"
 
 
 @dataclass
@@ -427,7 +435,7 @@ async def create_lite_image_infos(
 ) -> List[ImageInfoLite]:
     """Returns lite version of image infos to cut off unnecessary data.
 
-    :param cas_size: Size of the image for CAS, it will be added to URL.
+    :param cas_size: Size of the image for CLIP, it will be added to URL.
     :type cas_size: int
     :param image_infos: List of image infos to get lite version from.
     :type image_infos: List[sly.ImageInfo]
@@ -471,7 +479,7 @@ async def get_lite_image_infos(
 
     :param api: Instance of supervisely API.
     :type api: sly.Api
-    :param cas_size: Size of the image for CAS, it will be added to URL.
+    :param cas_size: Size of the image for CLIP, it will be added to URL.
     :type cas_size: int
     :param project_id: ID of the project to get images from.
     :type project_id: int
@@ -600,7 +608,7 @@ async def image_get_list_async(
     project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
-    per_page: int = 500,
+    per_page: int = 1000,
     wo_embeddings: Optional[bool] = False,
     deleted_after: Optional[str] = None,
 ) -> List[sly.ImageInfo]:
@@ -620,7 +628,7 @@ async def image_get_list_async(
     :type dataset_id: int, optional
     :param image_ids: List of image IDs to get images from. If None, will get all images.
     :type image_ids: List[int], optional
-    :param per_page: Number of images to return per page. Default is 500.
+    :param per_page: Number of images to return per page. Default is 1000.
     :type per_page: int
     :param wo_embeddings: If True, will return only images without embeddings. Default is False.
     :type wo_embeddings: bool, optional
@@ -660,36 +668,47 @@ async def image_get_list_async(
             if ApiField.FILTER not in page_data:
                 page_data[ApiField.FILTER] = []
             page_data[ApiField.FILTER].extend(ids_filter)
+        
         page_data[ApiField.PAGE] = 1
-
-        async with semaphore:
-            response = await api.post_async(method, page_data)
-            response_json = response.json()
-
-            pages_count = response_json["pagesCount"]
-
-            batch_items = []
-            # Process first page
-            for item in response_json.get("entities", []):
-                image_info = api.image._convert_json_info(item)
-                batch_items.append(image_info)
-
-            # Get remaining pages if they exist
-            page_tasks = []
-            if pages_count > 1:
-                for page in range(2, pages_count + 1):
-                    page_data_copy = page_data.copy()
-                    page_data_copy[ApiField.PAGE] = page
-                    page_tasks.append(api.post_async(method, page_data_copy))
-
-                responses = await asyncio.gather(*page_tasks)
-                for resp in responses:
-                    resp_json = resp.json()
-                    for item in resp_json.get("entities", []):
+        first_response = await api.post_async(method, page_data)
+        first_response_json = first_response.json()
+        
+        total_pages = first_response_json.get("pagesCount", 1)
+        batch_items = []
+        
+        entities = first_response_json.get("entities", [])
+        for item in entities:
+            image_info = api.image._convert_json_info(item)
+            batch_items.append(image_info)
+        
+        if total_pages > 1:
+            async def fetch_page(page_num):
+                page_data_copy = page_data.copy()
+                page_data_copy[ApiField.PAGE] = page_num
+                
+                async with semaphore:
+                    response = await api.post_async(method, page_data_copy)
+                    response_json = response.json()
+                    
+                    page_items = []
+                    entities = response_json.get("entities", [])
+                    for item in entities:
                         image_info = api.image._convert_json_info(item)
-                        batch_items.append(image_info)
-
-            return batch_items
+                        page_items.append(image_info)
+                    
+                    return page_items
+            
+            # Create tasks for all remaining pages
+            tasks = []
+            for page_num in range(2, total_pages + 1):
+                tasks.append(asyncio.create_task(fetch_page(page_num)))
+            
+            page_results = await asyncio.gather(*tasks)
+            
+            for page_items in page_results:
+                batch_items.extend(page_items)
+        
+        return batch_items
 
     if image_ids is None:
         # If no image IDs specified, get all images
@@ -1012,7 +1031,6 @@ def _start_projections_service(
         agent_id=None,
         module_id=module_id,
         workspace_id=workspace_id,
-        params={},  # ! TODO: remove after sly SDK release
     )
     api.app.wait(session.task_id, target_status=sly.task.Status.STARTED)
     return session
@@ -1021,13 +1039,61 @@ def _start_projections_service(
 @with_retries()
 @to_thread
 def start_projections_service(api: sly.Api, project_id: int):
-    #! replace with projections service slug when available
-    module_info = api.app.get_ecosystem_module_info(
-        slug="546804b13d9ed54a9105b9f850c14d14/projections-service"
-    )
+    try:
+        e_msg = ""
+        module_info = api.app.get_ecosystem_module_info(slug=PROJECTIONS_SLUG)
+    except Exception as e:
+        e_msg = f"Error: {str(e)}"
+        module_info = None
+    if module_info is None:
+        raise RuntimeError(
+            f"[Project: {project_id}] Projections service module not found in ecosystem. {e_msg}"
+        )
     project = api.project.get_info_by_id(project_id)
     team_id = project.team_id
     workspace_id = project.workspace_id
+
+    # Check if the task is already in projections_task_map
+    if team_id in projections_task_map:
+        task_ids = projections_task_map[team_id]
+        for task_id in task_ids:
+            task_status = api.task.get_status(task_id)
+            if task_status == api.task.Status.STARTED:
+                return task_id
+            elif task_status == api.task.Status.QUEUED:
+                task_info = api.task.get_info_by_id(task_id)
+
+                if task_info.meta.get("retries", 0) == 0:
+                    created_at = parse_timestamp(task_info.created_at)
+                    elapsed_time = (
+                        datetime.datetime.now(datetime.timezone.utc) - created_at
+                    ).total_seconds()
+
+                    if elapsed_time > 120:  # Task created more than 2 minutes ago
+                        projections_task_map[team_id].remove(task_id)
+                    else:  # Task created less than 2 minutes ago
+                        # Wait 10 seconds for the task to start
+                        try:
+                            api.app.wait(
+                                task_id,
+                                target_status=api.task.Status.STARTED,
+                                attempts=1,
+                                attempt_delay_sec=20,
+                            )
+                            if api.app.wait_until_ready_for_api_calls(task_id):
+                                return task_id
+                        except Exception as e:
+                            sly.logger.debug(f"Error waiting for task {task_id} to start: {str(e)}")
+                            # If the task is still not started, remove it from the map
+                            projections_task_map[team_id].remove(task_id)
+                            continue
+                        else:
+                            # If the task started, return its ID
+                            return task_id
+
+    # If no task is found, start a new projections service
+    sly.logger.debug(f"[Project: {project_id}] Starting Projections service for team ID {team_id}.")
+
     sessions = api.app.get_sessions(team_id, module_info.id, statuses=[api.task.Status.STARTED])
     me = api.user.get_my_info()
     sessions = [s for s in sessions if s.user_id == me.id]
@@ -1038,11 +1104,17 @@ def start_projections_service(api: sly.Api, project_id: int):
 
     ready = api.app.wait_until_ready_for_api_calls(session.task_id)
     if not ready:
-        sly.logger.info("Restarting Projections service...")
+        sly.logger.debug(f"[Project: {project_id}] Restarting Projections service...")
         session = _start_projections_service(api, module_info.id, workspace_id)
         ready = api.app.wait_until_ready_for_api_calls(session.task_id)
         if not ready:
             raise RuntimeError("Projections service is not ready for API calls after restart")
+
+    # Add the task to projections_task_map
+    if projections_task_map.get(team_id, None) is None:
+        projections_task_map[team_id] = []
+    projections_task_map[team_id].append(session.task_id)
+
     return session.task_id
 
 
@@ -1066,4 +1138,86 @@ def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
     :rtype: bool
     """
     team_info = api.team.get_info_by_id(team_id)
+
+    # If usage is None or plan is None, allow embeddings
+    if team_info.usage is None or team_info.usage.plan is None:
+        return True
+
     return team_info.usage.plan != "free"
+
+
+def get_app_host(api: sly.Api, slug: str) -> str:
+    """Get the app host URL from the Supervisely API.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :return: The app host URL.
+    :rtype: str
+    """
+    session_token = api.app.get_session_token(slug)
+    sly.logger.debug("Session token for CLIP slug %s: %s", slug, session_token)
+    host = api.server_address.rstrip("/") + "/net/" + session_token
+    sly.logger.debug("App host URL for CLIP: %s", host)
+    return host
+
+
+@to_thread
+def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
+    """Set embeddings updated at timestamp to None for all images in the project."""
+    try:
+        sly.logger.debug(
+            f"[Project: {project_id}] Starting to set embeddings updated at to None for images."
+        )
+        datasets = api.dataset.get_list(project_id=project_id, recursive=True)
+        if len(datasets) == 0:
+            return
+        dataset_ids = []
+        for dataset in datasets:
+            if dataset.images_count != 0 or dataset.items_count != 0:
+                dataset_ids.append(dataset.id)
+                continue
+        if len(dataset_ids) == 0:
+            return
+        try:
+            image_ids = []
+            for dataset_id in dataset_ids:
+                sly.logger.debug(
+                    f"[Project: {project_id}] Getting images for dataset ID {dataset_id}"
+                )
+                image_ids.extend([image.id for image in api.image.get_list(dataset_id=dataset_id)])
+            timestamps = [None] * len(image_ids)
+        except Exception as e:
+            sly.logger.warning(
+                f"[Project: {project_id}] Failed to get images for dataset ID {dataset_id}: {e}"
+            )
+            return
+        api.image.set_embeddings_updated_at(ids=image_ids, timestamps=timestamps)
+        sly.logger.debug(
+            f"[Project: {project_id}] Set embeddings updated at to None for images successfully."
+        )
+    except Exception as e:
+        sly.logger.error(
+            f"[Project: {project_id}] Failed to set embeddings updated at to None for images: {e}",
+            exc_info=True,
+        )
+
+
+@to_thread
+@timeit
+def set_update_flag(api: sly.Api, project_id: int):
+    custom_data = api.project.get_custom_data(project_id)
+    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = datetime.datetime.now(
+        datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    api.project.update_custom_data(project_id, custom_data, silent=True)
+
+
+@to_thread
+@timeit
+def clear_update_flag(api: sly.Api, project_id: int):
+    custom_data = api.project.get_custom_data(project_id)
+    if custom_data is None or custom_data == {}:
+        return
+    if CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT in custom_data:
+        del custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT]
+        api.project.update_custom_data(project_id, custom_data, silent=True)

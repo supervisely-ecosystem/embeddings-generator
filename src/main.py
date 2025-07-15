@@ -4,7 +4,6 @@ from typing import Dict, List
 
 import numpy as np
 import supervisely as sly
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from supervisely.imaging.color import get_predefined_colors
@@ -23,19 +22,19 @@ from src.utils import (
     ImageInfoLite,
     ResponseFields,
     ResponseStatus,
-    is_team_plan_sufficient,
+    clean_image_embeddings_updated_at,
+    clear_update_flag,
     create_lite_image_infos,
     embeddings_up_to_date,
-    get_lite_image_infos,
     get_project_info,
     image_get_list_async,
+    is_team_plan_sufficient,
     parse_timestamp,
-    run_safe,
     send_request,
     set_embeddings_in_progress,
     set_project_embeddings_updated_at,
+    set_update_flag,
     start_projections_service,
-    stop_projections_service,
     timeit,
 )
 from src.visualization import (
@@ -74,117 +73,129 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     data = {"image_ids": [<image-id-1>, <image-id-2>, ...], "team_id": <your-team-id>}
     api.task.send_request(task_id, "embeddings", data, skip_response=True)
     """
-    sly.logger.info(
-        f"Started creating embeddings for project {event.project_id}",
-        extra={
-            "force": event.force,
-            "return_vectors": event.return_vectors,
-            "image_ids": event.image_ids,
-        },
-    )
-
-    collection_msg = f"[Collection: {event.project_id}] "
-
-    project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
-
-    # --------------------- Step 0: Check Team Subscription Plan. --------------------- #
-    if not await is_team_plan_sufficient(api, project_info.team_id):
-        message = f"Team {project_info.team_id} with 'free' plan cannot create embeddings. "
-        sly.logger.warning(message)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
-
-    # --------------------- Step 1: Check If Embeddings Are Already In Progress. --------------------- #
-
-    if project_info.embeddings_in_progress:
-        message = f"{collection_msg} Embeddings creation is already in progress. Skipping."
-        sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=409)
-
-    # ---------------------- Step 2: Check If Embeddings Are Already Up To Date. --------------------- #
-
-    if event.force:
-        images_to_create = await image_get_list_async(api, event.project_id)
-        images_to_delete = []
-    elif event.image_ids:
-        images_to_create = await image_get_list_async(
-            api,
-            event.project_id,
-            image_ids=event.image_ids,
-            wo_embeddings=True,
+    try:
+        msg_prefix = f"[Project: {event.project_id}]"
+        sly.logger.info(
+            f"{msg_prefix} Started creating embeddings.",
+            extra={
+                "force": event.force,
+                "return_vectors": event.return_vectors,
+                "image_ids": event.image_ids,
+            },
         )
-        if project_info.embeddings_updated_at is not None:
-            images_to_delete = await image_get_list_async(
+
+        project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+
+        # --------------------- Step 0: Check Team Subscription Plan. --------------------- #
+        if not await is_team_plan_sufficient(api, project_info.team_id):
+            message = f"Team {project_info.team_id} with 'free' plan cannot create embeddings. "
+            sly.logger.warning(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
+
+        # ---------------------- Step 1-1: Check If Embeddings Enabled For Project. ---------------------- #
+
+        if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+            message = f"{msg_prefix} AI Search is disabled. Skipping."
+            sly.logger.info(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+        # --------------------- Step 1-2: Check If Embeddings Are Already In Progress. --------------------- #
+
+        if project_info.embeddings_in_progress:
+            message = f"{msg_prefix} Embeddings creation is already in progress. Skipping."
+            sly.logger.info(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+        # ---------------------- Step 2: Check If Embeddings Are Already Up To Date. --------------------- #
+
+        if event.force:
+            images_to_create = await image_get_list_async(api, event.project_id)
+            images_to_delete = []
+        elif event.image_ids:
+            images_to_create = await image_get_list_async(
                 api,
                 event.project_id,
                 image_ids=event.image_ids,
-                deleted_after=project_info.embeddings_updated_at,
+                wo_embeddings=True,
             )
-        else:
-            images_to_delete = []
-    else:
-        images_to_create = await image_get_list_async(api, event.project_id, wo_embeddings=True)
-        if project_info.embeddings_updated_at is not None:
-            images_to_delete = await image_get_list_async(
-                api, event.project_id, deleted_after=project_info.embeddings_updated_at
-            )
-        else:
-            images_to_delete = []
-
-    if len(images_to_create) == 0 and len(images_to_delete) == 0:
-        message = f"{collection_msg} Embeddings are up to date. Skipping."
-        sly.logger.info(message)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=409)
-
-    async def execute():
-        try:
-            await set_embeddings_in_progress(api, event.project_id, True)
-
-            # ----------------------- Step 3: If Force Is True, Delete The Collection. ----------------------- #
-            if event.force:
-                sly.logger.debug(f"{collection_msg} Force enabled, deleting collection.")
-                await qdrant.delete_collection(event.project_id)
-
-            # ---------------- Step 4: Process Images. Check And Create Collection If Needed. ---------------- #
-            image_infos, vectors = await process_images(
-                api,
-                event.project_id,
-                to_create=images_to_create,
-                to_delete=images_to_delete,
-                return_vectors=event.return_vectors,
-            )
-            await set_project_embeddings_updated_at(api, event.project_id)
-            if event.return_vectors:
-                sly.logger.info(
-                    f"{collection_msg} Embeddings creation has been completed. "
-                    f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
-                )
-                await set_embeddings_in_progress(api, event.project_id, False)
-                return JSONResponse(
-                    {
-                        ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
-                        ResponseFields.VECTORS: vectors,
-                    }
+            if project_info.embeddings_updated_at is not None:
+                images_to_delete = await image_get_list_async(
+                    api,
+                    event.project_id,
+                    image_ids=event.image_ids,
+                    deleted_after=project_info.embeddings_updated_at,
                 )
             else:
-                await set_embeddings_in_progress(api, event.project_id, False)
-                message = f"{collection_msg} Embeddings creation has been completed."
-                sly.logger.info(message)
-                return JSONResponse({ResponseFields.MESSAGE: message})
-        except Exception as e:
-            message = f"{collection_msg} Error while creating embeddings: {str(e)}"
-            sly.logger.error(message, exc_info=True)
-            await set_embeddings_in_progress(api, event.project_id, False)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+                images_to_delete = []
+        else:
+            images_to_create = await image_get_list_async(api, event.project_id, wo_embeddings=True)
+            if project_info.embeddings_updated_at is not None:
+                images_to_delete = await image_get_list_async(
+                    api, event.project_id, deleted_after=project_info.embeddings_updated_at
+                )
+            else:
+                images_to_delete = []
 
-    task_id = f"embeddings_{event.project_id}_{datetime.datetime.now().timestamp()}"
-    task = asyncio.create_task(execute())
-    g.background_tasks[task_id] = task
-    return JSONResponse(
-        {
-            ResponseFields.MESSAGE: "Embeddings creation started.",
-            ResponseFields.BACKGROUND_TASK_ID: task_id,
-        }
-    )
+        if len(images_to_create) == 0 and len(images_to_delete) == 0:
+            message = f"{msg_prefix} Nothing to update. Skipping."
+            sly.logger.info(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+        async def execute():
+            try:
+                # ----------------------- Step 3: If Force Is True, Delete The Collection. ----------------------- #
+                if event.force:
+                    sly.logger.debug(f"{msg_prefix} Force enabled, deleting qdrant collection.")
+                    await qdrant.delete_collection(event.project_id)
+
+                # ---------------- Step 4: Process Images. Check And Create Collection If Needed. ---------------- #
+                image_infos, vectors = await process_images(
+                    api,
+                    event.project_id,
+                    to_create=images_to_create,
+                    to_delete=images_to_delete,
+                    return_vectors=event.return_vectors,
+                )
+                await set_project_embeddings_updated_at(api, event.project_id)
+                if event.return_vectors:
+                    sly.logger.info(
+                        f"{msg_prefix} Embeddings creation has been completed. "
+                        f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
+                    )
+                    await set_embeddings_in_progress(api, event.project_id, False)
+                    await clear_update_flag(api, event.project_id)
+                    g.background_tasks.pop(int(event.project_id), None)
+                    return JSONResponse(
+                        {
+                            ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
+                            ResponseFields.VECTORS: vectors,
+                        }
+                    )
+                else:
+                    await set_embeddings_in_progress(api, event.project_id, False)
+                    await clear_update_flag(api, event.project_id)
+                    g.background_tasks.pop(int(event.project_id), None)
+                    message = f"{msg_prefix} Embeddings creation has been completed."
+                    sly.logger.info(message)
+                    return JSONResponse({ResponseFields.MESSAGE: message})
+            except Exception as e:
+                message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
+                sly.logger.error(message, exc_info=True)
+                await set_embeddings_in_progress(api, event.project_id, False)
+                await clear_update_flag(api, event.project_id)
+                g.background_tasks.pop(int(event.project_id), None)
+                return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
+        await set_embeddings_in_progress(api, event.project_id, True)
+        await set_update_flag(api, event.project_id)
+        asyncio.create_task(execute())
+        task_id = int(event.project_id)
+        g.background_tasks[task_id] = True
+        return JSONResponse({ResponseFields.MESSAGE: f"{msg_prefix} Embeddings creation started."})
+    except Exception as e:
+        message = f"{msg_prefix} Error during embeddings creation: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
 
 @app.event(Event.Search, use_state=True)
@@ -200,8 +211,9 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
     # returns a list of ImageInfoLite objects for each query.
     # response: List[List[Dict]]
     try:
+        msg_prefix = f"[Project: {event.project_id}]"
         sly.logger.info(
-            f"Searching for similar images in project {event.project_id}",
+            f"{msg_prefix} Searching for similar images started.",
             extra={
                 "prompt": event.prompt,
                 "by_image_ids": event.by_image_ids,  # If True, search will be performed by image IDs.
@@ -212,7 +224,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             },
         )
 
-        # ----------------- Step 0: Check Team Subscription Plan. ---------------- #
+        # ---------------------------- Step 0-1: Check Team Subscription Plan. --------------------------- #
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
         if not await is_team_plan_sufficient(api, project_info.team_id):
             message = (
@@ -221,10 +233,18 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             sly.logger.error(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
 
+        # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
+
+        if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+            message = f"{msg_prefix} AI Search is disabled. Skipping."
+            sly.logger.info(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
         if await qdrant.collection_exists(event.project_id) is False:
-            message = f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
+            message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
+            await clean_image_embeddings_updated_at(api, project_info.id)
             api.project.disable_embeddings(project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
@@ -240,7 +260,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 # If prompt is a comma-separated string, split it into a list.
                 text_prompts = event.prompt.split(",")
 
-        sly.logger.debug("Formatted text prompts: %s", text_prompts)
+        sly.logger.debug(f"{msg_prefix} Formatted text prompts: {text_prompts}")
 
         image_urls = []
         # If request contains image IDs, get image URLs to add to the query.
@@ -254,18 +274,17 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 )
 
             lite_image_infos = await create_lite_image_infos(
-                cas_size=g.IMAGE_SIZE_FOR_CAS,
+                cas_size=g.IMAGE_SIZE_FOR_CLIP,
                 image_infos=image_infos,
             )
             sly.logger.debug(
-                "Request contains image IDs, obtained %d image infos. Will use their URLs for the query.",
-                len(lite_image_infos),
+                f"{msg_prefix} Request contains image IDs, obtained {len(lite_image_infos)} image infos. Will use their URLs for the query.",
             )
             image_urls = [image_info.cas_url for image_info in lite_image_infos]
 
         # Combine text prompts and image URLs to create a query.
         queries = text_prompts + image_urls
-        sly.logger.info("Final query: %s", queries)
+        sly.logger.debug(f"{msg_prefix} Final search query: {queries}")
 
         if len(queries) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "No queries provided."})
@@ -274,8 +293,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         query_vectors = await cas.get_vectors(queries)
         sly.logger.debug(
-            "The query has been vectorized and will be used for search. Number of vectors: %d.",
-            len(query_vectors),
+            f"{msg_prefix} The query has been vectorized and will be used for search. Number of vectors: {len(query_vectors)}.",
         )
 
         # -------------------------- Step 4: Search For Similar Images In Qdrant ------------------------- #
@@ -318,12 +336,12 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 )
             )
 
-        results = []
+        results = {}
         for task in asyncio.as_completed(tasks):
             search_results, query = await task
             items = search_results[qdrant.SearchResultField.ITEMS]
             if len(items) == 0:
-                sly.logger.debug("No similar images found for query %s", query)
+                sly.logger.debug(f"{msg_prefix} No similar images found for query {query}")
                 continue
             # items = [info.to_json() for info in items]
             if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
@@ -332,16 +350,40 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             else:
                 for i in range(len(items)):
                     items[i].score = None
-            results.extend(items)  #! check if we need to select higher score result for same items
-            sly.logger.debug("Found %d similar images for a query %s", len(items), query)
-        if len(results) == 0:
+            # Update results dictionary, keeping only highest scoring items
+            for item in items:
+                item_id = item.id
+                if item_id not in results:
+                    # First occurrence of this item
+                    results[item_id] = item
+                else:
+                    # Item already exists, compare scores
+                    existing_score = results[item_id].score
+                    new_score = item.score
+
+                    # Update if new score is higher (handle None scores)
+                    if existing_score is None and new_score is not None:
+                        results[item_id] = item
+                    elif (
+                        existing_score is not None
+                        and new_score is not None
+                        and new_score > existing_score
+                    ):
+                        results[item_id] = item
+                    # If both are None or new score is lower/equal, keep existing item
+            sly.logger.info(
+                f"{msg_prefix} Found {len(items)} similar images for a query '{query}'."
+            )
+        # Convert back to list for further processing
+        results_list = list(results.values())
+        if len(results_list) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "No similar images found."})
         # Save the results to the Entities Collection.
-        collection_id = await collection_manager.save(results)
+        collection_id = await collection_manager.save(results_list)
         return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
     except Exception as e:
-        sly.logger.error(f"Error during search: {str(e)}", exc_info=True)
-        return JSONResponse({ResponseFields.MESSAGE: f"Search failed: {str(e)}"})
+        sly.logger.error(f"{msg_prefix} Error during search: {str(e)}", exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: f"Search failed: {str(e)}"}, status_code=500)
 
 
 @app.event(Event.Diverse, use_state=True)
@@ -359,104 +401,119 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     # data = {"project_id": <your-project-id>, "limit": <limit>, "method": "kmeans"}
 
     """
-
-    sly.logger.info(
-        f"Generating diverse population for project {event.project_id}.",
-        extra={
-            "sampling_method": event.sampling_method,
-            "sample_size": event.sample_size,
-            "clustering_method": event.clustering_method,
-            "num_clusters": event.sample_size,
-            "dataset_id": event.dataset_id,
-            "image_ids": event.image_ids,
-        },
-    )
-
-    # ----------------- Step 0: Check Team Subscription Plan. ---------------- #
-    project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
-    if not await is_team_plan_sufficient(api, project_info.team_id):
-        message = f"Team {project_info.team_id} with 'free' plan cannot use the AI search features."
-        sly.logger.error(message)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
-
-    # ----------------- Step 1: Check If Collection Exists ---------------- #
-    if await qdrant.collection_exists(event.project_id) is False:
-        message = (
-            f"Embeddings collection for project {event.project_id} does not exist. Disabling..."
-        )
-        sly.logger.warning(message)
-        api.project.disable_embeddings(project_info.id)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
-
-    # ------------------------------------ Step 2: Get Image Vectors From Qdrant ------------------------------------ #
-    if event.image_ids:
-        image_infos, vectors = await qdrant.get_items_by_id(
-            event.project_id, event.image_ids, with_vectors=True
-        )
-    elif event.dataset_id:
-        image_infos = await image_get_list_async(api, event.project_id, dataset_id=event.dataset_id)
-        ids = [info.id for info in image_infos]
-        image_infos, vectors = await qdrant.get_items_by_id(
-            event.project_id, ids, with_vectors=True
-        )
-    else:
-        image_infos, vectors = await qdrant.get_items(event.project_id, with_vectors=True)
-
-    if len(vectors) == 0:
-        return JSONResponse({ResponseFields.MESSAGE: "No vectors found."})
-
-    # ------------------------- Step 3: Prepare Data For Projections Service ------------------------- #
-
-    data = {
-        "vectors": vectors,
-        "sample_size": event.sample_size,
-        "sampling_method": event.sampling_method,
-    }
-    if event.clustering_method == ClusteringMethods.KMEANS:
-        data["settings"] = {
-            "num_clusters": event.num_clusters,
-            "clustering_method": event.clustering_method,
-        }
-    elif event.clustering_method == ClusteringMethods.DBSCAN:
-        data["settings"] = {"clustering_method": event.clustering_method}
-
-    # -------------------------------- Step 4: Run Projections Service ------------------------------- #
     try:
-        projections_service_task_id = await start_projections_service(api, event.project_id)
-    except Exception as e:
-        sly.logger.error(f"Failed to start projections service: {str(e)}", exc_info=True)
-        return JSONResponse(
-            {ResponseFields.MESSAGE: f"Failed to start projections service: {str(e)}"},
-            status_code=500,
+        msg_prefix = f"[Project: {event.project_id}]"
+        sly.logger.info(
+            f"{msg_prefix} Generating diverse population.",
+            extra={
+                "sampling_method": event.sampling_method,
+                "sample_size": event.sample_size,
+                "clustering_method": event.clustering_method,
+                "num_clusters": event.sample_size,
+                "dataset_id": event.dataset_id,
+                "image_ids": event.image_ids,
+            },
         )
 
-    # --------------- Step 5: Send Request To Projections Service And Return The Result -------------- #
-    samples = await send_request(
-        api, task_id=projections_service_task_id, method="diverse", data=data
-    )
-    result = []
-    sly.logger.debug("Generated diverse samples: %s", samples)
-    for label, sample in samples.items():
-        result.extend([image_infos[i] for i in sample])
+        # ---------------------------- Step 0-1: Check Team Subscription Plan. --------------------------- #
+        project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+        if not await is_team_plan_sufficient(api, project_info.team_id):
+            message = (
+                f"Team {project_info.team_id} with 'free' plan cannot use the AI search features."
+            )
+            sly.logger.error(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
 
-    sly.logger.debug("Generated %d diverse images.", len(result))
+        # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
 
-    if len(result) == 0:
-        return JSONResponse({ResponseFields.MESSAGE: "No diverse images found."})
+        if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+            message = f"{msg_prefix} AI Search is disabled. Skipping."
+            sly.logger.info(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
-    collection_manager = DiverseCollectionManager(api, event.project_id)
-    collection_id = await collection_manager.save(result)
+        # ------------------------------ Step 1: Check If Collection Exists ------------------------------ #
+        if await qdrant.collection_exists(event.project_id) is False:
+            message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
+            sly.logger.warning(message)
+            await clean_image_embeddings_updated_at(api, project_info.id)
+            api.project.disable_embeddings(project_info.id)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
-    # * commented out because the projections service will be stopped by its own scheduler
-    # await stop_projections_service(api, projections_service_task_id)
+        # ------------------------------------ Step 2: Get Image Vectors From Qdrant ------------------------------------ #
+        if event.image_ids:
+            image_infos, vectors = await qdrant.get_items_by_id(
+                event.project_id, event.image_ids, with_vectors=True
+            )
+        elif event.dataset_id:
+            image_infos = await image_get_list_async(
+                api, event.project_id, dataset_id=event.dataset_id
+            )
+            ids = [info.id for info in image_infos]
+            image_infos, vectors = await qdrant.get_items_by_id(
+                event.project_id, ids, with_vectors=True
+            )
+        else:
+            image_infos, vectors = await qdrant.get_items(event.project_id, with_vectors=True)
 
-    return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
+        if len(vectors) == 0:
+            return JSONResponse({ResponseFields.MESSAGE: "No vectors found."})
+
+        # ------------------------- Step 3: Prepare Data For Projections Service ------------------------- #
+
+        data = {
+            "vectors": vectors,
+            "sample_size": event.sample_size,
+            "sampling_method": event.sampling_method,
+        }
+        if event.clustering_method == ClusteringMethods.KMEANS:
+            data["settings"] = {
+                "num_clusters": event.num_clusters,
+                "clustering_method": event.clustering_method,
+            }
+        elif event.clustering_method == ClusteringMethods.DBSCAN:
+            data["settings"] = {"clustering_method": event.clustering_method}
+
+        # -------------------------------- Step 4: Run Projections Service ------------------------------- #
+        try:
+            projections_service_task_id = await start_projections_service(api, event.project_id)
+        except Exception as e:
+            message = f"{msg_prefix} Failed to start projections service: {str(e)}"
+            sly.logger.error(message, exc_info=True)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
+        # --------------- Step 5: Send Request To Projections Service And Return The Result -------------- #
+        samples = await send_request(
+            api, task_id=projections_service_task_id, method="diverse", data=data
+        )
+        result = []
+        sly.logger.debug(f"{msg_prefix} Generated diverse samples: {samples}.")
+        for label, sample in samples.items():
+            result.extend([image_infos[i] for i in sample])
+
+        if len(result) == 0:
+            sly.logger.debug(f"{msg_prefix} No diverse images found.")
+            return JSONResponse({ResponseFields.MESSAGE: "No diverse images found."})
+
+        sly.logger.info(f"{msg_prefix} Generated {len(result)} diverse images.")
+
+        collection_manager = DiverseCollectionManager(api, event.project_id)
+        collection_id = await collection_manager.save(result)
+
+        return JSONResponse({ResponseFields.COLLECTION_ID: collection_id})
+
+    except Exception as e:
+        message = f"{msg_prefix} Error during diverse population generation: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
 
 @app.event(Event.Clusters, use_state=True)
 async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
     # TODO: Remove this response to implement clustering.
     return JSONResponse({ResponseFields.MESSAGE: "Clustering are not supported yet."})
+
+    msg_prefix = f"[Project: {event.project_id}]"
+    
     sly.logger.info(
         f"Generating clusters for project {event.project_id}.",
         extra={
@@ -475,9 +532,17 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
     data = {"vectors": vectors, "reduce": True}
     if event.reduction_dimensions:
         data["reduction_dimensions"] = event.reduction_dimensions
+
+    try:
+        projections_service_task_id = await start_projections_service(api, event.project_id)
+    except Exception as e:
+        message = f"{msg_prefix} Failed to start projections service: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
     labels = await send_request(
         api,
-        g.projections_service_task_id,
+        projections_service_task_id,
         "clusters",
         data=data,
         timeout=60 * 5,
@@ -584,35 +649,89 @@ async def projections_up_to_date_endpoint(request: Request):
 async def check_task_status(request: Request):
     try:
         req_data = await request.json()
-        task_id = req_data.get("task_id")
+        task_id = req_data.get("task_id")  # project_id
+        if not task_id:
+            message = "Task ID is required"
+            sly.logger.debug(message)
+            return JSONResponse(
+                {
+                    ResponseFields.STATUS: ResponseStatus.ERROR,
+                    ResponseFields.MESSAGE: message,
+                },
+                status_code=400,
+            )
+        else:
+            task_id = int(task_id)
 
-        if not task_id or task_id not in g.background_tasks:
+        if task_id not in g.background_tasks:
+            message = f"[Project: {task_id}] Processing task not found"
+            sly.logger.debug(message)
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.NOT_FOUND,
-                    ResponseFields.MESSAGE: f"Task with ID {task_id} not found",
+                    ResponseFields.MESSAGE: message,
                 }
             )
-
-        task = g.background_tasks[task_id]
-
-        if task.done():
-            # Get the result and clean up
-            result = task.result()
-            # Optionally remove the task from active_tasks to free memory
-            # del g.active_tasks[task_id]  # Uncomment if you want to clean up
-            return JSONResponse(
-                {ResponseFields.STATUS: ResponseStatus.COMPLETED, ResponseFields.RESULT: result}
-            )
         else:
+            message = f"[Project: {task_id}] Task is still running"
+            sly.logger.debug(message)
             return JSONResponse(
                 {
                     ResponseFields.STATUS: ResponseStatus.IN_PROGRESS,
-                    ResponseFields.MESSAGE: "Task is still running",
+                    ResponseFields.MESSAGE: message,
                 }
             )
 
     except Exception as e:
+        message = f"[Project: {task_id}] Error checking task status: {str(e)}"
+        sly.logger.debug(message, exc_info=True)
         return JSONResponse(
-            {ResponseFields.STATUS: ResponseStatus.ERROR, ResponseFields.MESSAGE: str(e)}
+            {
+                ResponseFields.STATUS: ResponseStatus.ERROR,
+                ResponseFields.MESSAGE: message,
+            },
         )
+
+
+@server.get("/health")
+async def health_check():
+    status = "healthy"
+    checks = {}
+    status_code = 200
+    try:
+        # Check Qdrant connection
+        try:
+            await qdrant.client.info()
+            checks["qdrant"] = "healthy"
+        except Exception as e:
+            checks["qdrant"] = f"unhealthy: {str(e)}"
+            status = "degraded"
+            status_code = 503
+
+        # Check CLIP service availability
+        try:
+            if await cas.is_flow_ready():
+                checks["clip"] = "healthy"
+            else:
+                checks["clip"] = "unhealthy: CLIP service is not ready"
+                status = "degraded"
+                status_code = 503
+        except Exception as e:
+            checks["clip"] = f"unhealthy: {str(e)}"
+            status = "degraded"
+            status_code = 503
+
+    except Exception as e:
+        status = "unhealthy"
+        checks["general"] = f"error: {str(e)}"
+        status_code = 500
+    return JSONResponse(
+        {
+            ResponseFields.STATUS: status,
+            "checks": checks,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+        },
+        status_code=status_code,
+    )

@@ -59,7 +59,7 @@ client = create_client_from_url(g.qdrant_host)
 try:
     sly.logger.info(f"Connecting to Qdrant at {g.qdrant_host}...")
     QdrantClient(g.qdrant_host).get_collections()
-    sly.logger.info(f"Connected to Qdrant at {g.qdrant_host}")
+    sly.logger.info(f"Connected to Qdrant successfully.")
 except Exception as e:
     sly.logger.error(f"Failed to connect to Qdrant at {g.qdrant_host}: {e}")
 
