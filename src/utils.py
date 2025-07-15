@@ -628,7 +628,7 @@ async def image_get_list_async(
     :type dataset_id: int, optional
     :param image_ids: List of image IDs to get images from. If None, will get all images.
     :type image_ids: List[int], optional
-    :param per_page: Number of images to return per page. Default is 500.
+    :param per_page: Number of images to return per page. Default is 1000.
     :type per_page: int
     :param wo_embeddings: If True, will return only images without embeddings. Default is False.
     :type wo_embeddings: bool, optional
