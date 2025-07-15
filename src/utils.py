@@ -669,29 +669,44 @@ async def image_get_list_async(
                 page_data[ApiField.FILTER] = []
             page_data[ApiField.FILTER].extend(ids_filter)
         
-        batch_items = []
-        page = 1
+        page_data[ApiField.PAGE] = 1
+        first_response = await api.post_async(method, page_data)
+        first_response_json = first_response.json()
         
-        while True:
-            page_data[ApiField.PAGE] = page
+        total_pages = first_response_json.get("pagesCount", 1)
+        batch_items = []
+        
+        entities = first_response_json.get("entities", [])
+        for item in entities:
+            image_info = api.image._convert_json_info(item)
+            batch_items.append(image_info)
+        
+        if total_pages > 1:
+            async def fetch_page(page_num):
+                page_data_copy = page_data.copy()
+                page_data_copy[ApiField.PAGE] = page_num
+                
+                async with semaphore:
+                    response = await api.post_async(method, page_data_copy)
+                    response_json = response.json()
+                    
+                    page_items = []
+                    entities = response_json.get("entities", [])
+                    for item in entities:
+                        image_info = api.image._convert_json_info(item)
+                        page_items.append(image_info)
+                    
+                    return page_items
             
-            async with semaphore:
-                response = await api.post_async(method, page_data)
-                response_json = response.json()
-                
-                entities = response_json.get("entities", [])
-                if not entities:
-                    break
-                    
-                for item in entities:
-                    image_info = api.image._convert_json_info(item)
-                    batch_items.append(image_info)
-                
-                # Check if there are more pages
-                if page >= response_json.get("pagesCount", 1):
-                    break
-                    
-                page += 1
+            # Create tasks for all remaining pages
+            tasks = []
+            for page_num in range(2, total_pages + 1):
+                tasks.append(asyncio.create_task(fetch_page(page_num)))
+            
+            page_results = await asyncio.gather(*tasks)
+            
+            for page_items in page_results:
+                batch_items.extend(page_items)
         
         return batch_items
 
