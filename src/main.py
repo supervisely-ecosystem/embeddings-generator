@@ -236,7 +236,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
 
         if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
-            message = f"{msg_prefix} AI Searhc is disabled. Skipping."
+            message = f"{msg_prefix} AI Search is disabled. Skipping."
             sly.logger.info(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
