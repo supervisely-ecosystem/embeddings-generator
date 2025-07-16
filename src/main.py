@@ -108,38 +108,51 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
         # ---------------------- Step 2: Check If Embeddings Are Already Up To Date. --------------------- #
 
-        if event.force:
-            images_to_create = await image_get_list_async(api, event.project_id)
-            images_to_delete = []
-        elif event.image_ids:
-            images_to_create = await image_get_list_async(
-                api,
-                event.project_id,
-                image_ids=event.image_ids,
-                wo_embeddings=True,
-            )
-            if project_info.embeddings_updated_at is not None:
-                images_to_delete = await image_get_list_async(
+        try:
+            await set_embeddings_in_progress(api, event.project_id, True)
+            await set_update_flag(api, event.project_id)
+            if event.force:
+                images_to_create = await image_get_list_async(api, event.project_id)
+                images_to_delete = []
+            elif event.image_ids:
+                images_to_create = await image_get_list_async(
                     api,
                     event.project_id,
                     image_ids=event.image_ids,
-                    deleted_after=project_info.embeddings_updated_at,
+                    wo_embeddings=True,
                 )
+                if project_info.embeddings_updated_at is not None:
+                    images_to_delete = await image_get_list_async(
+                        api,
+                        event.project_id,
+                        image_ids=event.image_ids,
+                        deleted_after=project_info.embeddings_updated_at,
+                    )
+                else:
+                    images_to_delete = []
             else:
-                images_to_delete = []
-        else:
-            images_to_create = await image_get_list_async(api, event.project_id, wo_embeddings=True)
-            if project_info.embeddings_updated_at is not None:
-                images_to_delete = await image_get_list_async(
-                    api, event.project_id, deleted_after=project_info.embeddings_updated_at
+                images_to_create = await image_get_list_async(
+                    api, event.project_id, wo_embeddings=True
                 )
-            else:
-                images_to_delete = []
+                if project_info.embeddings_updated_at is not None:
+                    images_to_delete = await image_get_list_async(
+                        api, event.project_id, deleted_after=project_info.embeddings_updated_at
+                    )
+                else:
+                    images_to_delete = []
 
-        if len(images_to_create) == 0 and len(images_to_delete) == 0:
-            message = f"{msg_prefix} Nothing to update. Skipping."
-            sly.logger.info(message)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+            if len(images_to_create) == 0 and len(images_to_delete) == 0:
+                await set_embeddings_in_progress(api, event.project_id, False)
+                await clear_update_flag(api, event.project_id)
+                message = f"{msg_prefix} Nothing to update. Skipping."
+                sly.logger.info(message)
+                return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+        except Exception as e:
+            message = f"{msg_prefix} Error while fetching images: {str(e)}"
+            sly.logger.error(message, exc_info=True)
+            await set_embeddings_in_progress(api, event.project_id, False)
+            await clear_update_flag(api, event.project_id)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
         async def execute():
             try:
@@ -186,8 +199,6 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 g.background_tasks.pop(int(event.project_id), None)
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
-        await set_embeddings_in_progress(api, event.project_id, True)
-        await set_update_flag(api, event.project_id)
         asyncio.create_task(execute())
         task_id = int(event.project_id)
         g.background_tasks[task_id] = True
@@ -513,7 +524,7 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
     return JSONResponse({ResponseFields.MESSAGE: "Clustering are not supported yet."})
 
     msg_prefix = f"[Project: {event.project_id}]"
-    
+
     sly.logger.info(
         f"Generating clusters for project {event.project_id}.",
         extra={
