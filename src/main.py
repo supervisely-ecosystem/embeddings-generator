@@ -23,12 +23,12 @@ from src.utils import (
     ResponseFields,
     ResponseStatus,
     clean_image_embeddings_updated_at,
+    cleanup_task_and_flags,
     clear_update_flag,
     create_lite_image_infos,
     embeddings_up_to_date,
     get_project_info,
     image_get_list_async,
-    is_team_plan_sufficient,
     parse_timestamp,
     send_request,
     set_embeddings_in_progress,
@@ -36,6 +36,7 @@ from src.utils import (
     set_update_flag,
     start_projections_service,
     timeit,
+    validate_project_for_ai_features,
 )
 from src.visualization import (
     create_projections,
@@ -71,7 +72,13 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     data = {"project_id": <your-project-id>, "team_id": <your-team-id>}
     2. Calculate embeddings for specific images.
     data = {"image_ids": [<image-id-1>, <image-id-2>, ...], "team_id": <your-team-id>}
-    api.task.send_request(task_id, "embeddings", data, skip_response=True)
+
+    Send POST request to the service endpoint: /embeddings
+    response = httpx.post(
+        "http://<your-server-address>/embeddings",
+        json=data,
+        headers={"Authorization": f"Bearer {your_token}"}
+    )
     """
     try:
         msg_prefix = f"[Project: {event.project_id}]"
@@ -86,20 +93,12 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
 
-        # --------------------- Step 0: Check Team Subscription Plan. --------------------- #
-        if not await is_team_plan_sufficient(api, project_info.team_id):
-            message = f"Team {project_info.team_id} with 'free' plan cannot create embeddings. "
-            sly.logger.warning(message)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
+        # --------------------------- Step 0: Validate Project For AI Features --------------------------- #
+        validation_error = await validate_project_for_ai_features(api, project_info, msg_prefix)
+        if validation_error:
+            return validation_error
 
-        # ---------------------- Step 1-1: Check If Embeddings Enabled For Project. ---------------------- #
-
-        if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
-            message = f"{msg_prefix} AI Search is disabled. Skipping."
-            sly.logger.info(message)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
-
-        # --------------------- Step 1-2: Check If Embeddings Are Already In Progress. --------------------- #
+        # --------------------- Step 1: Check If Embeddings Are Already In Progress. --------------------- #
 
         if project_info.embeddings_in_progress:
             message = f"{msg_prefix} Embeddings creation is already in progress. Skipping."
@@ -142,6 +141,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     images_to_delete = []
 
             if len(images_to_create) == 0 and len(images_to_delete) == 0:
+                # Only reset flags, don't clean background tasks here since no task was created yet
                 await set_embeddings_in_progress(api, event.project_id, False)
                 await clear_update_flag(api, event.project_id)
                 message = f"{msg_prefix} Nothing to update. Skipping."
@@ -150,9 +150,14 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         except Exception as e:
             message = f"{msg_prefix} Error while fetching images: {str(e)}"
             sly.logger.error(message, exc_info=True)
+            # Only reset flags, don't clean background tasks here since no task was created yet
             await set_embeddings_in_progress(api, event.project_id, False)
             await clear_update_flag(api, event.project_id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
+        async def cleanup_task_resources():
+            """Helper function to clean up task resources and reset project flags."""
+            await cleanup_task_and_flags(api, event.project_id)
 
         async def execute():
             try:
@@ -170,14 +175,15 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     return_vectors=event.return_vectors,
                 )
                 await set_project_embeddings_updated_at(api, event.project_id)
+
+                # Clean up resources before returning
+                await cleanup_task_resources()
+
                 if event.return_vectors:
                     sly.logger.info(
                         f"{msg_prefix} Embeddings creation has been completed. "
                         f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
                     )
-                    await set_embeddings_in_progress(api, event.project_id, False)
-                    await clear_update_flag(api, event.project_id)
-                    g.background_tasks.pop(int(event.project_id), None)
                     return JSONResponse(
                         {
                             ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
@@ -185,23 +191,24 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                         }
                     )
                 else:
-                    await set_embeddings_in_progress(api, event.project_id, False)
-                    await clear_update_flag(api, event.project_id)
-                    g.background_tasks.pop(int(event.project_id), None)
                     message = f"{msg_prefix} Embeddings creation has been completed."
                     sly.logger.info(message)
                     return JSONResponse({ResponseFields.MESSAGE: message})
+
+            except asyncio.CancelledError:
+                message = f"{msg_prefix} Embeddings creation was cancelled."
+                sly.logger.info(message)
+                await cleanup_task_resources()
+                raise  # Re-raise the CancelledError
             except Exception as e:
                 message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
                 sly.logger.error(message, exc_info=True)
-                await set_embeddings_in_progress(api, event.project_id, False)
-                await clear_update_flag(api, event.project_id)
-                g.background_tasks.pop(int(event.project_id), None)
+                await cleanup_task_resources()
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
-        asyncio.create_task(execute())
+        task = asyncio.create_task(execute())
         task_id = int(event.project_id)
-        g.background_tasks[task_id] = True
+        g.background_tasks[task_id] = task
         return JSONResponse({ResponseFields.MESSAGE: f"{msg_prefix} Embeddings creation started."})
     except Exception as e:
         message = f"{msg_prefix} Error during embeddings creation: {str(e)}"
@@ -212,15 +219,25 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 @app.event(Event.Search, use_state=True)
 @timeit
 async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
-    # Examples of requests:
-    # 1. Search for similar images using text prompt.
-    # data = {"project_id": <your-project-id>, "limit": <limit>, "prompt": <text-prompt>}
-    # 2. Search for similar images using image IDs.
-    # data = {"project_id": <your-project-id>, "limit": <limit>, "by_image_ids": [<image-id-1>, <image-id-2>, ...]}
-    # 3. Both text prompt and image IDs can be provided at the same time.
-    # response =api.task.send_request(task_id, "search", data) # Do not skip response.
-    # returns a list of ImageInfoLite objects for each query.
-    # response: List[List[Dict]]
+    """
+    Searches for similar images in a project using AI embeddings.
+    This endpoint allows searching images by text prompts or by image IDs.
+
+    Examples of requests:
+    1. Search for similar images using text prompt.
+    data = {"project_id": <your-project-id>, "limit": <limit>, "prompt": <text-prompt>}
+    2. Search for similar images using image IDs.
+    data = {"project_id": <your-project-id>, "limit": <limit>, "by_image_ids": [<image-id-1>, <image-id-2>, ...]}
+    3. Both text prompt and image IDs can be provided at the same time.
+    response = httpx.post(
+        "http://<your-server-address>/search",
+        json=data,
+        headers={"Authorization": f"Bearer {your_token}"}
+    )  # Do not skip response.
+    returns a list of ImageInfoLite objects for each query.
+    response: List[List[Dict]]
+    """
+
     try:
         msg_prefix = f"[Project: {event.project_id}]"
         sly.logger.info(
@@ -235,21 +252,11 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             },
         )
 
-        # ---------------------------- Step 0-1: Check Team Subscription Plan. --------------------------- #
+        # --------------------------- Step 0: Validate Project For AI Features --------------------------- #
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
-        if not await is_team_plan_sufficient(api, project_info.team_id):
-            message = (
-                f"Team {project_info.team_id} with 'free' plan cannot use the AI search features."
-            )
-            sly.logger.error(message)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
-
-        # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
-
-        if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
-            message = f"{msg_prefix} AI Search is disabled. Skipping."
-            sly.logger.info(message)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+        validation_error = await validate_project_for_ai_features(api, project_info, msg_prefix)
+        if validation_error:
+            return validation_error
 
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
         if await qdrant.collection_exists(event.project_id) is False:
@@ -407,9 +414,14 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     This approach is particularly valuable for creating balanced training datasets, getting a quick overview of content variety,
     and identifying outliers without having to manually review the entire image collection.
 
-    # Examples of requests:
-    # 1. Generate diverse population using KMeans method.
-    # data = {"project_id": <your-project-id>, "limit": <limit>, "method": "kmeans"}
+    Examples of requests:
+    1. Generate diverse population using KMeans method.
+    data = {"project_id": <your-project-id>, "limit": <limit>, "method": "kmeans"}
+    response = httpx.post(
+        "http://<your-server-address>/diverse",
+        json=data,
+        headers={"Authorization": f"Bearer {your_token}"}
+    )
 
     """
     try:
@@ -426,21 +438,11 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
             },
         )
 
-        # ---------------------------- Step 0-1: Check Team Subscription Plan. --------------------------- #
+        # --------------------------- Step 0: Validate Project For AI Features --------------------------- #
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
-        if not await is_team_plan_sufficient(api, project_info.team_id):
-            message = (
-                f"Team {project_info.team_id} with 'free' plan cannot use the AI search features."
-            )
-            sly.logger.error(message)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
-
-        # ---------------------- Step 0-2: Check If Embeddings Enabled For Project. ---------------------- #
-
-        if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
-            message = f"{msg_prefix} AI Search is disabled. Skipping."
-            sly.logger.info(message)
-            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+        validation_error = await validate_project_for_ai_features(api, project_info, msg_prefix)
+        if validation_error:
+            return validation_error
 
         # ------------------------------ Step 1: Check If Collection Exists ------------------------------ #
         if await qdrant.collection_exists(event.project_id) is False:
@@ -514,6 +516,142 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
 
     except Exception as e:
         message = f"{msg_prefix} Error during diverse population generation: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
+
+@app.event(Event.CancelEmbeddings, use_state=True)
+@timeit
+async def cancel_embeddings(api: sly.Api, event: Event.CancelEmbeddings) -> JSONResponse:
+    """
+    Endpoint to cancel embeddings creation for a project.
+    This will stop the running embeddings task if it exists.
+
+    :param api: Supervisely API object.
+    :param event: Event object containing project_id for which to cancel embeddings.
+
+    Example request:
+    data = {"project_id": <your-project-id>}
+    response = httpx.post(
+        "http://<your-server-address>/cancel_embeddings",
+        json=data,
+        headers={"Authorization": f"Bearer {your_token}"}
+    )
+    """
+    try:
+        msg_prefix = f"[Project: {event.project_id}]"
+        sly.logger.info(f"{msg_prefix} Received request to cancel embeddings creation.")
+
+        task_id = int(event.project_id)
+
+        # Check if there is a running task for this project
+        if task_id not in g.background_tasks:
+            message = f"{msg_prefix} No running embeddings task found."
+            sly.logger.info(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+        # Get the task and cancel it
+        task = g.background_tasks[task_id]
+
+        if task.done():
+            # Task is already finished
+            if task.cancelled():
+                message = f"{msg_prefix} Embeddings task was already cancelled."
+            else:
+                try:
+                    task.result()  # Check if it completed successfully
+                    message = f"{msg_prefix} Embeddings task was already completed."
+                except Exception:
+                    message = f"{msg_prefix} Embeddings task had already failed."
+            sly.logger.info(message)
+        else:
+            # Task is still running, cancel it
+            task.cancel()
+            message = f"{msg_prefix} Embeddings task has been cancelled."
+            sly.logger.info(message)
+
+        # Clean up the task from the dictionary and reset project flags
+        await cleanup_task_and_flags(api, event.project_id)
+
+        return JSONResponse({ResponseFields.MESSAGE: message})
+
+    except Exception as e:
+        message = f"{msg_prefix} Error during embeddings cancellation: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+
+
+@app.event(Event.TaskStatus, use_state=True)
+@timeit
+async def task_status(api: sly.Api, event: Event.TaskStatus) -> JSONResponse:
+    """
+    Endpoint to check the status of embeddings creation task for a project.
+
+    :param api: Supervisely API object.
+    :param event: Event object containing project_id for which to check task status.
+
+    Example request:
+    data = {"project_id": <your-project-id>}
+    response = httpx.post(
+        "http://<your-server-address>/task_status",
+        json=data,
+        headers={"Authorization": f"Bearer {your_token}"}
+    )
+    """
+    try:
+        msg_prefix = f"[Project: {event.project_id}]"
+        sly.logger.info(f"{msg_prefix} Received request to check task status.")
+
+        task_id = int(event.project_id)
+
+        # Check if there is a task for this project
+        if task_id not in g.background_tasks:
+            message = f"{msg_prefix} No task found."
+            sly.logger.info(message)
+            return JSONResponse(
+                {
+                    ResponseFields.MESSAGE: message,
+                    ResponseFields.STATUS: ResponseStatus.NO_TASK,
+                    ResponseFields.IS_RUNNING: False,
+                }
+            )
+
+        # Get the task and check its status
+        task = g.background_tasks[task_id]
+
+        if task.done():
+            # Task is finished, check if it was cancelled or completed
+            if task.cancelled():
+                status = ResponseStatus.CANCELLED
+                is_running = False
+                message = f"{msg_prefix} Task was cancelled."
+            else:
+                try:
+                    result = task.result()  # This will raise an exception if the task failed
+                    status = ResponseStatus.COMPLETED
+                    is_running = False
+                    message = f"{msg_prefix} Task completed successfully."
+                except Exception as e:
+                    status = ResponseStatus.FAILED
+                    is_running = False
+                    message = f"{msg_prefix} Task failed with error: {str(e)}"
+        else:
+            # Task is still running
+            status = ResponseStatus.RUNNING
+            is_running = True
+            message = f"{msg_prefix} Task is currently running."
+
+        sly.logger.info(message)
+        return JSONResponse(
+            {
+                ResponseFields.MESSAGE: message,
+                ResponseFields.STATUS: status,
+                ResponseFields.IS_RUNNING: is_running,
+            }
+        )
+
+    except Exception as e:
+        message = f"{msg_prefix} Error while checking task status: {str(e)}"
         sly.logger.error(message, exc_info=True)
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 

@@ -145,3 +145,27 @@ class Event:
                 data.get(EventFields.REDUCTION_DIMENSIONS),
                 data.get(EventFields.SAVE),
             )
+
+    class CancelEmbeddings:
+        endpoint = "/cancel_embeddings"
+
+        def __init__(self, project_id: int):
+            self.project_id = project_id
+
+        @classmethod
+        def from_json(cls, data: Dict[str, Any]):
+            return cls(
+                data.get(EventFields.PROJECT_ID),
+            )
+
+    class TaskStatus:
+        endpoint = "/task_status"
+
+        def __init__(self, project_id: int):
+            self.project_id = project_id
+
+        @classmethod
+        def from_json(cls, data: Dict[str, Any]):
+            return cls(
+                data.get(EventFields.PROJECT_ID),
+            )

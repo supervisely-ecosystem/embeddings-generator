@@ -115,6 +115,7 @@ class ResponseFields:
     IMAGE_IDS = "image_ids"
     BACKGROUND_TASK_ID = "background_task_id"
     RESULT = "result"
+    IS_RUNNING = "is_running"
 
 
 class ResponseStatus:
@@ -125,6 +126,10 @@ class ResponseStatus:
     ERROR = "error"
     IN_PROGRESS = "in_progress"
     NOT_FOUND = "not_found"
+    NO_TASK = "no_task"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    RUNNING = "running"
 
 
 class CustomDataFields:
@@ -668,46 +673,47 @@ async def image_get_list_async(
             if ApiField.FILTER not in page_data:
                 page_data[ApiField.FILTER] = []
             page_data[ApiField.FILTER].extend(ids_filter)
-        
+
         page_data[ApiField.PAGE] = 1
         first_response = await api.post_async(method, page_data)
         first_response_json = first_response.json()
-        
+
         total_pages = first_response_json.get("pagesCount", 1)
         batch_items = []
-        
+
         entities = first_response_json.get("entities", [])
         for item in entities:
             image_info = api.image._convert_json_info(item)
             batch_items.append(image_info)
-        
+
         if total_pages > 1:
+
             async def fetch_page(page_num):
                 page_data_copy = page_data.copy()
                 page_data_copy[ApiField.PAGE] = page_num
-                
+
                 async with semaphore:
                     response = await api.post_async(method, page_data_copy)
                     response_json = response.json()
-                    
+
                     page_items = []
                     entities = response_json.get("entities", [])
                     for item in entities:
                         image_info = api.image._convert_json_info(item)
                         page_items.append(image_info)
-                    
+
                     return page_items
-            
+
             # Create tasks for all remaining pages
             tasks = []
             for page_num in range(2, total_pages + 1):
                 tasks.append(asyncio.create_task(fetch_page(page_num)))
-            
+
             page_results = await asyncio.gather(*tasks)
-            
+
             for page_items in page_results:
                 batch_items.extend(page_items)
-        
+
         return batch_items
 
     if image_ids is None:
@@ -1221,3 +1227,41 @@ def clear_update_flag(api: sly.Api, project_id: int):
     if CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT in custom_data:
         del custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT]
         api.project.update_custom_data(project_id, custom_data, silent=True)
+
+
+async def cleanup_task_and_flags(api: sly.Api, project_id: int):
+    """
+    Helper function to clean up task resources and reset project flags.
+    Used across multiple endpoints to avoid code duplication.
+    """
+    from src.globals import background_tasks
+
+    await set_embeddings_in_progress(api, project_id, False)
+    await clear_update_flag(api, project_id)
+    task_id = int(project_id)
+    if task_id in background_tasks:
+        del background_tasks[task_id]
+
+
+async def validate_project_for_ai_features(
+    api: sly.Api, project_info: sly.ProjectInfo, msg_prefix: str
+):
+    """
+    Common validation for AI features (embeddings, search, diverse).
+    Returns JSONResponse with error if validation fails, None if validation passes.
+    """
+    from fastapi.responses import JSONResponse
+
+    # Check team subscription plan
+    if not await is_team_plan_sufficient(api, project_info.team_id):
+        message = f"Team {project_info.team_id} with 'free' plan cannot use AI features."
+        sly.logger.warning(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
+
+    # Check if embeddings are enabled for the project
+    if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+        message = f"{msg_prefix} AI Search is disabled. Skipping."
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+    return None  # Validation passed
