@@ -11,6 +11,7 @@ from supervisely.imaging.color import get_predefined_colors
 import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
+from src.autorestart import EmbeddingsTaskManager
 from src.events import Event
 from src.functions import process_images, update_embeddings
 from src.pointcloud import upload as upload_pcd
@@ -54,6 +55,15 @@ if sly.is_development():
     # This will enable Advanced Debugging mode only in development mode.
     # Do not need to remove it in production.
     sly.app.development.enable_advanced_debug()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Clean up stuck projects from previous session on service startup."""
+    try:
+        await EmbeddingsTaskManager.cleanup_stuck_projects(g.api)
+    except Exception as e:
+        sly.logger.error(f"Failed to cleanup stuck projects on startup: {e}", exc_info=True)
 
 
 @app.event(Event.Embeddings, use_state=True)
@@ -110,6 +120,10 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         try:
             await set_embeddings_in_progress(api, event.project_id, True)
             await set_update_flag(api, event.project_id)
+
+            # Create task file to track embeddings creation for crash recovery
+            await EmbeddingsTaskManager.create_task_file(event.project_id)
+
             if event.force:
                 images_to_create = await image_get_list_async(api, event.project_id)
                 images_to_delete = []
@@ -144,6 +158,8 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 # Only reset flags, don't clean background tasks here since no task was created yet
                 await set_embeddings_in_progress(api, event.project_id, False)
                 await clear_update_flag(api, event.project_id)
+                # Remove task file since no actual processing is needed
+                await EmbeddingsTaskManager.remove_task_file(event.project_id)
                 message = f"{msg_prefix} Nothing to update. Skipping."
                 sly.logger.info(message)
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
@@ -153,11 +169,15 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             # Only reset flags, don't clean background tasks here since no task was created yet
             await set_embeddings_in_progress(api, event.project_id, False)
             await clear_update_flag(api, event.project_id)
+            # Remove task file on error
+            await EmbeddingsTaskManager.remove_task_file(event.project_id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
         async def cleanup_task_resources():
             """Helper function to clean up task resources and reset project flags."""
             await cleanup_task_and_flags(api, event.project_id)
+            # Remove task file when embeddings creation is complete or fails
+            await EmbeddingsTaskManager.remove_task_file(event.project_id)
 
         async def execute():
             try:
