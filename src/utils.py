@@ -1167,7 +1167,7 @@ def get_app_host(api: sly.Api, slug: str, net_server_address: str = None) -> str
     """
 
     server_address = net_server_address or api.server_address
-    net_appendix = "" if net_server_address else "/net/"
+    net_appendix = "/" if net_server_address else "/net/"
     session_token = api.app.get_session_token(slug)
     sly.logger.debug("Session token for CLIP slug %s: %s", slug, session_token)
     host = server_address.rstrip("/") + net_appendix + session_token
