@@ -57,7 +57,7 @@ if sly.is_development():
     sly.app.development.enable_advanced_debug()
 
 
-@app.on_event("startup")
+@server.on_event("startup")
 async def startup_event():
     """Clean up stuck projects from previous session on service startup."""
     try:
