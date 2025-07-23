@@ -36,6 +36,8 @@ class SlyCasClient(Client):
                 _new_port = 443
             elif self._scheme == "http":
                 _new_port = 80
+            else:
+                _new_port = _port if _port else 80
         except:
             raise ValueError(f"{server} is not a valid scheme")
 
@@ -50,14 +52,9 @@ class SlyCasClient(Client):
                 warnings.warn("Credential is not supported for websocket, please use grpc or http")
 
         if self._scheme in ("grpc", "http", "websocket"):
-            if self._scheme == "http":
-                # Handle cases where path starts with /net/ (when net_appendix is "/net/")
-                # or direct session token (when net_appendix is "" and net_server_address is used)
-                if r.path and _port:
-                    _new_port = _port
-                _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
-            else:
-                _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
+            if self._scheme == "http" and r.path and _port:
+                _new_port = _port
+            _kwargs = dict(host=r.hostname, port=_port, protocol=self._scheme, tls=_tls)
 
             from jina import Client
 
