@@ -1152,17 +1152,25 @@ def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
     return team_info.usage.plan != "free"
 
 
-def get_app_host(api: sly.Api, slug: str) -> str:
+def get_app_host(api: sly.Api, slug: str, net_server_address: str = None) -> str:
     """Get the app host URL from the Supervisely API.
 
     :param api: Instance of supervisely API.
     :type api: sly.Api
+    :param slug: Slug of the app to get the host URL for.
+    :type slug: str
+    :param net_server_address: Optional server address for the app. If not provided, uses
+        the server address from the API instance.
+    :type net_server_address: str, optional
     :return: The app host URL.
     :rtype: str
     """
+
+    server_address = net_server_address or api.server_address
+    net_appendix = "" if net_server_address else "/net/"
     session_token = api.app.get_session_token(slug)
     sly.logger.debug("Session token for CLIP slug %s: %s", slug, session_token)
-    host = api.server_address.rstrip("/") + "/net/" + session_token
+    host = server_address.rstrip("/") + net_appendix + session_token
     sly.logger.debug("App host URL for CLIP: %s", host)
     return host
 
