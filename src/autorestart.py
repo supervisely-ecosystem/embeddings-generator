@@ -54,6 +54,7 @@ class EmbeddingsTaskManager:
     @to_thread
     def create_task_file(project_id: int, timestamp: Optional[str] = None) -> None:
         """Create a file to track embeddings task start."""
+        msg_prefix = f"[Project: {project_id}]"
         try:
             EmbeddingsTaskManager._ensure_state_dir()
 
@@ -73,33 +74,37 @@ class EmbeddingsTaskManager:
                 json.dump(task_info.to_dict(), f, indent=2)
 
             logger.debug(
-                f"Created embeddings task file for project {project_id}",
+                f"{msg_prefix} Created embeddings task file",
                 extra={"file_path": file_path, "timestamp": task_timestamp},
             )
 
         except Exception as e:
-            logger.error(f"Failed to create task file for project {project_id}: {e}", exc_info=True)
+            logger.error(
+                f"{msg_prefix} Failed to create task file: {e}",
+                exc_info=True,
+            )
 
     @staticmethod
     @to_thread
     def remove_task_file(project_id: int) -> None:
         """Remove task file when embeddings creation is complete."""
+        msg_prefix = f"[Project: {project_id}]"
         try:
             file_path = EmbeddingsTaskManager._get_project_file_path(project_id)
 
             if os.path.exists(file_path):
                 os.remove(file_path)
                 logger.debug(
-                    f"Removed embeddings task file for project {project_id}",
+                    f"{msg_prefix} Removed embeddings task file",
                     extra={"file_path": file_path},
                 )
             else:
                 logger.debug(
-                    f"Task file for project {project_id} does not exist, nothing to remove."
+                    f"{msg_prefix} Task file does not exist, nothing to remove."
                 )
 
         except Exception as e:
-            logger.error(f"Failed to remove task file for project {project_id}: {e}", exc_info=True)
+            logger.error(f"{msg_prefix} Failed to remove task file: {e}", exc_info=True)
 
     @staticmethod
     def get_stuck_projects() -> List[ProjectTaskInfo]:
@@ -203,6 +208,4 @@ class EmbeddingsTaskManager:
             logger.info(f"Cleared {len(files)} task files")
 
         except Exception as e:
-            logger.error(f"Failed to clear task files: {e}", exc_info=True)
-            logger.error(f"Failed to clear task files: {e}", exc_info=True)
             logger.error(f"Failed to clear task files: {e}", exc_info=True)
