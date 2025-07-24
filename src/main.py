@@ -26,6 +26,7 @@ from src.utils import (
     clean_image_embeddings_updated_at,
     cleanup_task_and_flags,
     clear_update_flag,
+    create_current_timestamp,
     create_lite_image_infos,
     embeddings_up_to_date,
     get_project_info,
@@ -59,11 +60,14 @@ if sly.is_development():
 
 @server.on_event("startup")
 async def startup_event():
-    """Clean up stuck projects from previous session on service startup."""
+    """Reset state for stuck projects from previous session on service startup."""
     try:
-        await EmbeddingsTaskManager.cleanup_stuck_projects(g.api)
+        await EmbeddingsTaskManager.reset_state_stuck_projects(g.api)
     except Exception as e:
-        sly.logger.error(f"Failed to cleanup stuck projects on startup: {e}", exc_info=True)
+        sly.logger.error(
+            f"[Embeddings Task Manager] Failed to reset state for stuck projects on startup: {e}",
+            exc_info=True,
+        )
 
 
 @app.event(Event.Embeddings, use_state=True)
@@ -119,10 +123,11 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
         try:
             await set_embeddings_in_progress(api, event.project_id, True)
-            await set_update_flag(api, event.project_id)
 
+            timestamp = await create_current_timestamp()
+            await set_update_flag(api, event.project_id, timestamp)
             # Create task file to track embeddings creation for crash recovery
-            await EmbeddingsTaskManager.create_task_file(event.project_id)
+            await EmbeddingsTaskManager.create_task_file(event.project_id, timestamp)
 
             if event.force:
                 images_to_create = await image_get_list_async(api, event.project_id)
@@ -676,6 +681,104 @@ async def task_status(api: sly.Api, event: Event.TaskStatus) -> JSONResponse:
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
 
+@server.get("/health")
+async def health_check():
+    status = "healthy"
+    checks = {}
+    status_code = 200
+    try:
+        # Check Qdrant connection
+        try:
+            await qdrant.client.info()
+            checks["qdrant"] = "healthy"
+        except Exception as e:
+            checks["qdrant"] = f"unhealthy: {str(e)}"
+            status = "degraded"
+            status_code = 503
+
+        # Check CLIP service availability
+        try:
+            if await cas.is_flow_ready():
+                checks["clip"] = "healthy"
+            else:
+                checks["clip"] = "unhealthy: CLIP service is not ready"
+                status = "degraded"
+                status_code = 503
+        except Exception as e:
+            checks["clip"] = f"unhealthy: {str(e)}"
+            status = "degraded"
+            status_code = 503
+
+    except Exception as e:
+        status = "unhealthy"
+        checks["general"] = f"error: {str(e)}"
+        status_code = 500
+    return JSONResponse(
+        {
+            ResponseFields.STATUS: status,
+            "checks": checks,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+        },
+        status_code=status_code,
+    )
+
+
+# -------------- Method Below Is Deprecated And Will Be Removed In Future Versions. -------------- #
+
+
+@server.post("/check_background_task_status")
+async def check_task_status(request: Request):
+    try:
+        req_data = await request.json()
+        task_id = req_data.get("task_id")  # project_id
+        if not task_id:
+            message = "Task ID is required"
+            sly.logger.debug(message)
+            return JSONResponse(
+                {
+                    ResponseFields.STATUS: ResponseStatus.ERROR,
+                    ResponseFields.MESSAGE: message,
+                },
+                status_code=400,
+            )
+        else:
+            task_id = int(task_id)
+
+        if task_id not in g.background_tasks:
+            message = f"[Project: {task_id}] Processing task not found"
+            sly.logger.debug(message)
+            return JSONResponse(
+                {
+                    ResponseFields.STATUS: ResponseStatus.NOT_FOUND,
+                    ResponseFields.MESSAGE: message,
+                }
+            )
+        else:
+            message = f"[Project: {task_id}] Task is still running"
+            sly.logger.debug(message)
+            return JSONResponse(
+                {
+                    ResponseFields.STATUS: ResponseStatus.IN_PROGRESS,
+                    ResponseFields.MESSAGE: message,
+                }
+            )
+
+    except Exception as e:
+        message = f"[Project: {task_id}] Error checking task status: {str(e)}"
+        sly.logger.debug(message, exc_info=True)
+        return JSONResponse(
+            {
+                ResponseFields.STATUS: ResponseStatus.ERROR,
+                ResponseFields.MESSAGE: message,
+            },
+        )
+
+
+# ------------------------------------ End Of Deprecated Code ------------------------------------ #
+
+
 @app.event(Event.Clusters, use_state=True)
 async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
     # TODO: Remove this response to implement clustering.
@@ -812,95 +915,3 @@ async def projections_up_to_date_endpoint(request: Request):
     state = request.state.state
     project_id = state["project_id"]
     return await is_projections_up_to_date(g.api, project_id)
-
-
-@server.post("/check_background_task_status")
-async def check_task_status(request: Request):
-    try:
-        req_data = await request.json()
-        task_id = req_data.get("task_id")  # project_id
-        if not task_id:
-            message = "Task ID is required"
-            sly.logger.debug(message)
-            return JSONResponse(
-                {
-                    ResponseFields.STATUS: ResponseStatus.ERROR,
-                    ResponseFields.MESSAGE: message,
-                },
-                status_code=400,
-            )
-        else:
-            task_id = int(task_id)
-
-        if task_id not in g.background_tasks:
-            message = f"[Project: {task_id}] Processing task not found"
-            sly.logger.debug(message)
-            return JSONResponse(
-                {
-                    ResponseFields.STATUS: ResponseStatus.NOT_FOUND,
-                    ResponseFields.MESSAGE: message,
-                }
-            )
-        else:
-            message = f"[Project: {task_id}] Task is still running"
-            sly.logger.debug(message)
-            return JSONResponse(
-                {
-                    ResponseFields.STATUS: ResponseStatus.IN_PROGRESS,
-                    ResponseFields.MESSAGE: message,
-                }
-            )
-
-    except Exception as e:
-        message = f"[Project: {task_id}] Error checking task status: {str(e)}"
-        sly.logger.debug(message, exc_info=True)
-        return JSONResponse(
-            {
-                ResponseFields.STATUS: ResponseStatus.ERROR,
-                ResponseFields.MESSAGE: message,
-            },
-        )
-
-
-@server.get("/health")
-async def health_check():
-    status = "healthy"
-    checks = {}
-    status_code = 200
-    try:
-        # Check Qdrant connection
-        try:
-            await qdrant.client.info()
-            checks["qdrant"] = "healthy"
-        except Exception as e:
-            checks["qdrant"] = f"unhealthy: {str(e)}"
-            status = "degraded"
-            status_code = 503
-
-        # Check CLIP service availability
-        try:
-            if await cas.is_flow_ready():
-                checks["clip"] = "healthy"
-            else:
-                checks["clip"] = "unhealthy: CLIP service is not ready"
-                status = "degraded"
-                status_code = 503
-        except Exception as e:
-            checks["clip"] = f"unhealthy: {str(e)}"
-            status = "degraded"
-            status_code = 503
-
-    except Exception as e:
-        status = "unhealthy"
-        checks["general"] = f"error: {str(e)}"
-        status_code = 500
-    return JSONResponse(
-        {
-            ResponseFields.STATUS: status,
-            "checks": checks,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%S.%fZ"
-            ),
-        },
-        status_code=status_code,
-    )

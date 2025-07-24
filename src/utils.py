@@ -1218,9 +1218,9 @@ def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
 
 @to_thread
 @timeit
-def set_update_flag(api: sly.Api, project_id: int):
+def set_update_flag(api: sly.Api, project_id: int, timestamp: Optional[str] = None):
     custom_data = api.project.get_custom_data(project_id)
-    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = datetime.datetime.now(
+    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = timestamp or datetime.datetime.now(
         datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     api.project.update_custom_data(project_id, custom_data, silent=True)
@@ -1273,3 +1273,9 @@ async def validate_project_for_ai_features(
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
 
     return None  # Validation passed
+
+
+@to_thread
+def create_current_timestamp() -> str:
+    """Create a timestamp in the format 'YYYY-MM-DDTHH:MM:SS.ssssssZ'."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

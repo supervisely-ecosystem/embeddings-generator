@@ -8,9 +8,9 @@ from typing import Dict, List, Optional
 import supervisely as sly
 from supervisely import logger
 
-from src.utils import CustomDataFields, to_thread, set_embeddings_in_progress, clear_update_flag
+from src.utils import CustomDataFields, clear_update_flag, set_embeddings_in_progress, to_thread
 
-STATE_DIR: str = "./state/in_progress"
+STATE_DIR: str = "./state/generator_in_progress"
 PROJECT_FILE_PATTERN = "project_{project_id}.json"
 
 
@@ -52,19 +52,19 @@ class EmbeddingsTaskManager:
 
     @staticmethod
     @to_thread
-    def create_task_file(project_id: int) -> None:
+    def create_task_file(project_id: int, timestamp: Optional[str] = None) -> None:
         """Create a file to track embeddings task start."""
         try:
             EmbeddingsTaskManager._ensure_state_dir()
 
             # Create timestamp and custom data flag
-            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+            task_timestamp = timestamp or datetime.datetime.now(datetime.timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%S.%fZ"
             )
             custom_data_flag = CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT
 
             task_info = ProjectTaskInfo(
-                project_id=project_id, timestamp=timestamp, custom_data_flag=custom_data_flag
+                project_id=project_id, timestamp=task_timestamp, custom_data_flag=custom_data_flag
             )
 
             file_path = EmbeddingsTaskManager._get_project_file_path(project_id)
@@ -74,7 +74,7 @@ class EmbeddingsTaskManager:
 
             logger.debug(
                 f"Created embeddings task file for project {project_id}",
-                extra={"file_path": file_path, "timestamp": timestamp},
+                extra={"file_path": file_path, "timestamp": task_timestamp},
             )
 
         except Exception as e:
@@ -139,35 +139,37 @@ class EmbeddingsTaskManager:
             return []
 
     @staticmethod
-    async def cleanup_stuck_projects(api: sly.Api) -> None:
-        """Clean up stuck projects after service restart."""
+    async def reset_state_stuck_projects(api: sly.Api) -> None:
+        """Reset state for stuck projects after service restart."""
+        msg_prefix = "[Embeddings Task Manager]"
         try:
             stuck_projects = EmbeddingsTaskManager.get_stuck_projects()
 
             if not stuck_projects:
-                logger.debug("No stuck projects to clean up")
+                logger.debug(f"{msg_prefix} No stuck projects to reset state for")
                 return
 
-            logger.info(f"Cleaning up {len(stuck_projects)} stuck projects...")
+            logger.info(f"{msg_prefix} Resetting state for {len(stuck_projects)} stuck projects...")
 
             for task_info in stuck_projects:
                 try:
                     project_id = task_info.project_id
-                    logger.info(f"Cleaning up stuck project {project_id}")
+                    logger.debug(f"{msg_prefix} Resetting state for project {project_id}")
 
                     # Reset embeddings in progress flag and clear custom data flag
                     await set_embeddings_in_progress(api, project_id, False)
                     await clear_update_flag(api, project_id)
-                    logger.debug(f"Reset flags for project {project_id}")
+                    logger.debug(f"{msg_prefix} Reset state for project {project_id}")
 
                     # Remove task file
                     EmbeddingsTaskManager.remove_task_file(project_id)
 
-                    logger.info(f"Successfully cleaned up stuck project {project_id}")
+                    logger.info(f"{msg_prefix} Successfully reset state for project {project_id}")
 
                 except Exception as e:
                     logger.error(
-                        f"Failed to cleanup project {task_info.project_id}: {e}", exc_info=True
+                        f"{msg_prefix} Failed to reset state for project {task_info.project_id}: {e}",
+                        exc_info=True,
                     )
                     # Still try to remove the file even if API calls failed
                     try:
@@ -201,4 +203,6 @@ class EmbeddingsTaskManager:
             logger.info(f"Cleared {len(files)} task files")
 
         except Exception as e:
+            logger.error(f"Failed to clear task files: {e}", exc_info=True)
+            logger.error(f"Failed to clear task files: {e}", exc_info=True)
             logger.error(f"Failed to clear task files: {e}", exc_info=True)

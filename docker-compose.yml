@@ -20,7 +20,7 @@ services:
       CLIP_HOST: "${CLIP_HOST}" # CLIP application service, dont pass anything to search any available app instance automatically
     labels:
       proxy.app: embeddings-generator
-      supervisely.logs.app: embeddings-generator-test
+      supervisely.logs.app: embeddings-generator-logs
     volumes:
       - ./src:/app/src:ro
       - ./project_embeddings_state:/app/state
