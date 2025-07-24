@@ -563,9 +563,14 @@ async def cancel_embeddings(api: sly.Api, event: Event.CancelEmbeddings) -> JSON
         headers={"Authorization": f"Bearer {your_token}"}
     )
     """
+
     try:
         msg_prefix = f"[Project: {event.project_id}]"
         sly.logger.info(f"{msg_prefix} Received request to cancel embeddings creation.")
+
+        if api is None:
+            api = g.api  # Use global API if not provided
+            sly.logger.info(f"{msg_prefix} Using global API instance for cancel_embeddings.")
 
         task_id = int(event.project_id)
 
