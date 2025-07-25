@@ -231,3 +231,16 @@ async def download(api: sly.Api, pcd_id: int) -> EmbeddingsVisPCD:
     finally:
         tmp.close()
         os.remove(tmp.name)
+
+
+@to_thread
+@timeit
+def remove_pcd_file(api: sly.Api, pcd_id: int):
+    """
+    Removes a point cloud file from the dataset.
+    """
+    try:
+        api.pointcloud.remove(pcd_id)
+        sly.logger.debug(f"Removed outdated PCD file with ID {pcd_id}")
+    except Exception as e:
+        sly.logger.warning(f"Failed to remove PCD file with ID {pcd_id}: {str(e)}")

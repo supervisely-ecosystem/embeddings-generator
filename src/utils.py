@@ -115,6 +115,7 @@ class ResponseFields:
     IMAGE_IDS = "image_ids"
     BACKGROUND_TASK_ID = "background_task_id"
     RESULT = "result"
+    IS_RUNNING = "is_running"
 
 
 class ResponseStatus:
@@ -125,6 +126,10 @@ class ResponseStatus:
     ERROR = "error"
     IN_PROGRESS = "in_progress"
     NOT_FOUND = "not_found"
+    NO_TASK = "no_task"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    RUNNING = "running"
 
 
 class CustomDataFields:
@@ -668,46 +673,47 @@ async def image_get_list_async(
             if ApiField.FILTER not in page_data:
                 page_data[ApiField.FILTER] = []
             page_data[ApiField.FILTER].extend(ids_filter)
-        
+
         page_data[ApiField.PAGE] = 1
         first_response = await api.post_async(method, page_data)
         first_response_json = first_response.json()
-        
+
         total_pages = first_response_json.get("pagesCount", 1)
         batch_items = []
-        
+
         entities = first_response_json.get("entities", [])
         for item in entities:
             image_info = api.image._convert_json_info(item)
             batch_items.append(image_info)
-        
+
         if total_pages > 1:
+
             async def fetch_page(page_num):
                 page_data_copy = page_data.copy()
                 page_data_copy[ApiField.PAGE] = page_num
-                
+
                 async with semaphore:
                     response = await api.post_async(method, page_data_copy)
                     response_json = response.json()
-                    
+
                     page_items = []
                     entities = response_json.get("entities", [])
                     for item in entities:
                         image_info = api.image._convert_json_info(item)
                         page_items.append(image_info)
-                    
+
                     return page_items
-            
+
             # Create tasks for all remaining pages
             tasks = []
             for page_num in range(2, total_pages + 1):
                 tasks.append(asyncio.create_task(fetch_page(page_num)))
-            
+
             page_results = await asyncio.gather(*tasks)
-            
+
             for page_items in page_results:
                 batch_items.extend(page_items)
-        
+
         return batch_items
 
     if image_ids is None:
@@ -1039,6 +1045,7 @@ def _start_projections_service(
 @with_retries()
 @to_thread
 def start_projections_service(api: sly.Api, project_id: int):
+    msg_prefix = f"[Project: {project_id}]"
     try:
         e_msg = ""
         module_info = api.app.get_ecosystem_module_info(slug=PROJECTIONS_SLUG)
@@ -1047,7 +1054,7 @@ def start_projections_service(api: sly.Api, project_id: int):
         module_info = None
     if module_info is None:
         raise RuntimeError(
-            f"[Project: {project_id}] Projections service module not found in ecosystem. {e_msg}"
+            f"{msg_prefix} Projections service module not found in ecosystem. {e_msg}"
         )
     project = api.project.get_info_by_id(project_id)
     team_id = project.team_id
@@ -1083,7 +1090,9 @@ def start_projections_service(api: sly.Api, project_id: int):
                             if api.app.wait_until_ready_for_api_calls(task_id):
                                 return task_id
                         except Exception as e:
-                            sly.logger.debug(f"Error waiting for task {task_id} to start: {str(e)}")
+                            sly.logger.debug(
+                                f"{msg_prefix} Error waiting for task {task_id} to start: {str(e)}"
+                            )
                             # If the task is still not started, remove it from the map
                             projections_task_map[team_id].remove(task_id)
                             continue
@@ -1092,7 +1101,7 @@ def start_projections_service(api: sly.Api, project_id: int):
                             return task_id
 
     # If no task is found, start a new projections service
-    sly.logger.debug(f"[Project: {project_id}] Starting Projections service for team ID {team_id}.")
+    sly.logger.debug(f"{msg_prefix} Starting Projections service for team ID {team_id}.")
 
     sessions = api.app.get_sessions(team_id, module_info.id, statuses=[api.task.Status.STARTED])
     me = api.user.get_my_info()
@@ -1104,11 +1113,13 @@ def start_projections_service(api: sly.Api, project_id: int):
 
     ready = api.app.wait_until_ready_for_api_calls(session.task_id)
     if not ready:
-        sly.logger.debug(f"[Project: {project_id}] Restarting Projections service...")
+        sly.logger.debug(f"{msg_prefix} Restarting Projections service...")
         session = _start_projections_service(api, module_info.id, workspace_id)
         ready = api.app.wait_until_ready_for_api_calls(session.task_id)
         if not ready:
-            raise RuntimeError("Projections service is not ready for API calls after restart")
+            raise RuntimeError(
+                f"{msg_prefix} Projections service is not ready for API calls after restart"
+            )
 
     # Add the task to projections_task_map
     if projections_task_map.get(team_id, None) is None:
@@ -1146,17 +1157,25 @@ def is_team_plan_sufficient(api: sly.Api, team_id: int) -> bool:
     return team_info.usage.plan != "free"
 
 
-def get_app_host(api: sly.Api, slug: str) -> str:
+def get_app_host(api: sly.Api, slug: str, net_server_address: str = None) -> str:
     """Get the app host URL from the Supervisely API.
 
     :param api: Instance of supervisely API.
     :type api: sly.Api
+    :param slug: Slug of the app to get the host URL for.
+    :type slug: str
+    :param net_server_address: Optional server address for the app. If not provided, uses
+        the server address from the API instance.
+    :type net_server_address: str, optional
     :return: The app host URL.
     :rtype: str
     """
+
+    server_address = net_server_address or api.server_address
+    net_appendix = "/" if net_server_address else "/net/"
     session_token = api.app.get_session_token(slug)
     sly.logger.debug("Session token for CLIP slug %s: %s", slug, session_token)
-    host = api.server_address.rstrip("/") + "/net/" + session_token
+    host = server_address.rstrip("/") + net_appendix + session_token
     sly.logger.debug("App host URL for CLIP: %s", host)
     return host
 
@@ -1164,10 +1183,9 @@ def get_app_host(api: sly.Api, slug: str) -> str:
 @to_thread
 def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
     """Set embeddings updated at timestamp to None for all images in the project."""
+    msg_prefix = f"[Project: {project_id}]"
     try:
-        sly.logger.debug(
-            f"[Project: {project_id}] Starting to set embeddings updated at to None for images."
-        )
+        sly.logger.debug(f"{msg_prefix} Starting to set embeddings updated at to None for images.")
         datasets = api.dataset.get_list(project_id=project_id, recursive=True)
         if len(datasets) == 0:
             return
@@ -1181,32 +1199,28 @@ def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
         try:
             image_ids = []
             for dataset_id in dataset_ids:
-                sly.logger.debug(
-                    f"[Project: {project_id}] Getting images for dataset ID {dataset_id}"
-                )
+                sly.logger.debug(f"{msg_prefix} Getting images for dataset ID {dataset_id}")
                 image_ids.extend([image.id for image in api.image.get_list(dataset_id=dataset_id)])
             timestamps = [None] * len(image_ids)
         except Exception as e:
             sly.logger.warning(
-                f"[Project: {project_id}] Failed to get images for dataset ID {dataset_id}: {e}"
+                f"{msg_prefix} Failed to get images for dataset ID {dataset_id}: {e}"
             )
             return
         api.image.set_embeddings_updated_at(ids=image_ids, timestamps=timestamps)
-        sly.logger.debug(
-            f"[Project: {project_id}] Set embeddings updated at to None for images successfully."
-        )
+        sly.logger.debug(f"{msg_prefix} Set embeddings updated at to None for images successfully.")
     except Exception as e:
         sly.logger.error(
-            f"[Project: {project_id}] Failed to set embeddings updated at to None for images: {e}",
+            f"{msg_prefix} Failed to set embeddings updated at to None for images: {e}",
             exc_info=True,
         )
 
 
 @to_thread
 @timeit
-def set_update_flag(api: sly.Api, project_id: int):
+def set_update_flag(api: sly.Api, project_id: int, timestamp: Optional[str] = None):
     custom_data = api.project.get_custom_data(project_id)
-    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = datetime.datetime.now(
+    custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT] = timestamp or datetime.datetime.now(
         datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     api.project.update_custom_data(project_id, custom_data, silent=True)
@@ -1221,3 +1235,54 @@ def clear_update_flag(api: sly.Api, project_id: int):
     if CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT in custom_data:
         del custom_data[CustomDataFields.EMBEDDINGS_UPDATE_STARTED_AT]
         api.project.update_custom_data(project_id, custom_data, silent=True)
+
+
+async def cleanup_task_and_flags(api: sly.Api, project_id: int):
+    """
+    Helper function to clean up task resources and reset project flags.
+    Used across multiple endpoints to avoid code duplication.
+    """
+    from src.globals import background_tasks
+
+    await set_embeddings_in_progress(api, project_id, False)
+    await clear_update_flag(api, project_id)
+    task_id = int(project_id)
+    if task_id in background_tasks:
+        del background_tasks[task_id]
+
+
+async def validate_project_for_ai_features(
+    api: sly.Api, project_info: sly.ProjectInfo, msg_prefix: str
+):
+    """
+    Common validation for AI features (embeddings, search, diverse).
+    Returns JSONResponse with error if validation fails, None if validation passes.
+    """
+    from fastapi.responses import JSONResponse
+
+    # Check team subscription plan
+    if not await is_team_plan_sufficient(api, project_info.team_id):
+        message = f"Team {project_info.team_id} with 'free' plan cannot use AI features."
+        sly.logger.warning(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=403)
+
+    # Check if embeddings are enabled for the project
+    if project_info.embeddings_enabled is not None and project_info.embeddings_enabled is False:
+        message = f"{msg_prefix} AI Search is disabled. Skipping."
+        sly.logger.info(message)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=200)
+
+    return None  # Validation passed
+
+
+@to_thread
+def create_current_timestamp() -> str:
+    """Create a timestamp in the format 'YYYY-MM-DDTHH:MM:SS.ssssssZ'."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+@to_thread
+def disable_embeddings(api: sly.Api, project_id: int):
+    """Disable embeddings for the project."""
+    api.project.disable_embeddings(project_id)
+    sly.logger.debug(f"[Project: {project_id}] Embeddings disabled.")
