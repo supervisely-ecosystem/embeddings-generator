@@ -28,6 +28,7 @@ from src.utils import (
     clear_update_flag,
     create_current_timestamp,
     create_lite_image_infos,
+    disable_embeddings,
     embeddings_up_to_date,
     get_project_info,
     image_get_list_async,
@@ -289,7 +290,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
             await clean_image_embeddings_updated_at(api, project_info.id)
-            api.project.disable_embeddings(project_info.id)
+            await disable_embeddings(api, project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
         collection_manager = AiSearchCollectionManager(api, event.project_id)
@@ -475,7 +476,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
             message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
             await clean_image_embeddings_updated_at(api, project_info.id)
-            api.project.disable_embeddings(project_info.id)
+            await disable_embeddings(api, project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
         # ------------------------------------ Step 2: Get Image Vectors From Qdrant ------------------------------------ #
@@ -902,7 +903,7 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
             message = f"{msg_prefix} Embeddings collection does not exist, projections are not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
             await clean_image_embeddings_updated_at(api, project_info.id)
-            api.project.disable_embeddings(project_info.id)
+            await disable_embeddings(api, project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
         # ----------------------- Step 2: Update Embeddings If Needed ------------------------ #

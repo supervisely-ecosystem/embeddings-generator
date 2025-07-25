@@ -1183,10 +1183,9 @@ def get_app_host(api: sly.Api, slug: str, net_server_address: str = None) -> str
 @to_thread
 def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
     """Set embeddings updated at timestamp to None for all images in the project."""
+    msg_prefix = f"[Project: {project_id}]"
     try:
-        sly.logger.debug(
-            f"[Project: {project_id}] Starting to set embeddings updated at to None for images."
-        )
+        sly.logger.debug(f"{msg_prefix} Starting to set embeddings updated at to None for images.")
         datasets = api.dataset.get_list(project_id=project_id, recursive=True)
         if len(datasets) == 0:
             return
@@ -1200,23 +1199,19 @@ def clean_image_embeddings_updated_at(api: sly.Api, project_id: int):
         try:
             image_ids = []
             for dataset_id in dataset_ids:
-                sly.logger.debug(
-                    f"[Project: {project_id}] Getting images for dataset ID {dataset_id}"
-                )
+                sly.logger.debug(f"{msg_prefix} Getting images for dataset ID {dataset_id}")
                 image_ids.extend([image.id for image in api.image.get_list(dataset_id=dataset_id)])
             timestamps = [None] * len(image_ids)
         except Exception as e:
             sly.logger.warning(
-                f"[Project: {project_id}] Failed to get images for dataset ID {dataset_id}: {e}"
+                f"{msg_prefix} Failed to get images for dataset ID {dataset_id}: {e}"
             )
             return
         api.image.set_embeddings_updated_at(ids=image_ids, timestamps=timestamps)
-        sly.logger.debug(
-            f"[Project: {project_id}] Set embeddings updated at to None for images successfully."
-        )
+        sly.logger.debug(f"{msg_prefix} Set embeddings updated at to None for images successfully.")
     except Exception as e:
         sly.logger.error(
-            f"[Project: {project_id}] Failed to set embeddings updated at to None for images: {e}",
+            f"{msg_prefix} Failed to set embeddings updated at to None for images: {e}",
             exc_info=True,
         )
 
@@ -1284,7 +1279,10 @@ async def validate_project_for_ai_features(
 def create_current_timestamp() -> str:
     """Create a timestamp in the format 'YYYY-MM-DDTHH:MM:SS.ssssssZ'."""
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+@to_thread
+def disable_embeddings(api: sly.Api, project_id: int):
+    """Disable embeddings for the project."""
+    api.project.disable_embeddings(project_id)
+    sly.logger.debug(f"[Project: {project_id}] Embeddings disabled.")
