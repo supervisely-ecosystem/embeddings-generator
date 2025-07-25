@@ -61,10 +61,10 @@ async def create_projections(
         image_infos = await get_lite_image_infos(
             api, cas_size=g.IMAGE_SIZE_FOR_CLIP, project_id=project_id, image_ids=image_ids
         )
-    # image_hashes = [info.hash for info in image_infos]
+    image_ids = [info.id for info in image_infos]
 
     image_infos_result, vectors = await qdrant.get_items_by_id(
-        qdrant.IMAGES_COLLECTION, image_infos, with_vectors=True
+        project_id, image_ids, with_vectors=True
     )
 
     try:

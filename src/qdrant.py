@@ -64,10 +64,6 @@ except Exception as e:
     sly.logger.error(f"Failed to connect to Qdrant at {g.qdrant_host}: {e}")
 
 
-# IMAGES_COLLECTION = "images"
-IMAGES_COLLECTION = "images-test"
-
-
 class SearchResultField:
     ITEMS = "items"
     VECTORS = "vectors"
