@@ -921,7 +921,10 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
         image_infos, projections = await get_or_create_projections(
             api, event.project_id, project_info
         )
-
+        if image_infos is None or projections is None:
+            message = f"{msg_prefix} Projections could not be created or retrieved."
+            sly.logger.error(message)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
         # ------------------------ Step 4: Filter Results By Image IDs ---------------------- #
         indexes = []
         for i, info in enumerate(image_infos):

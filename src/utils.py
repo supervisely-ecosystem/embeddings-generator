@@ -1045,6 +1045,7 @@ def _start_projections_service(
 @with_retries()
 @to_thread
 def start_projections_service(api: sly.Api, project_id: int):
+    msg_prefix = f"[Project: {project_id}]"
     try:
         e_msg = ""
         module_info = api.app.get_ecosystem_module_info(slug=PROJECTIONS_SLUG)
@@ -1053,7 +1054,7 @@ def start_projections_service(api: sly.Api, project_id: int):
         module_info = None
     if module_info is None:
         raise RuntimeError(
-            f"[Project: {project_id}] Projections service module not found in ecosystem. {e_msg}"
+            f"{msg_prefix} Projections service module not found in ecosystem. {e_msg}"
         )
     project = api.project.get_info_by_id(project_id)
     team_id = project.team_id
@@ -1089,7 +1090,9 @@ def start_projections_service(api: sly.Api, project_id: int):
                             if api.app.wait_until_ready_for_api_calls(task_id):
                                 return task_id
                         except Exception as e:
-                            sly.logger.debug(f"Error waiting for task {task_id} to start: {str(e)}")
+                            sly.logger.debug(
+                                f"{msg_prefix} Error waiting for task {task_id} to start: {str(e)}"
+                            )
                             # If the task is still not started, remove it from the map
                             projections_task_map[team_id].remove(task_id)
                             continue
@@ -1098,7 +1101,7 @@ def start_projections_service(api: sly.Api, project_id: int):
                             return task_id
 
     # If no task is found, start a new projections service
-    sly.logger.debug(f"[Project: {project_id}] Starting Projections service for team ID {team_id}.")
+    sly.logger.debug(f"{msg_prefix} Starting Projections service for team ID {team_id}.")
 
     sessions = api.app.get_sessions(team_id, module_info.id, statuses=[api.task.Status.STARTED])
     me = api.user.get_my_info()
@@ -1110,11 +1113,13 @@ def start_projections_service(api: sly.Api, project_id: int):
 
     ready = api.app.wait_until_ready_for_api_calls(session.task_id)
     if not ready:
-        sly.logger.debug(f"[Project: {project_id}] Restarting Projections service...")
+        sly.logger.debug(f"{msg_prefix} Restarting Projections service...")
         session = _start_projections_service(api, module_info.id, workspace_id)
         ready = api.app.wait_until_ready_for_api_calls(session.task_id)
         if not ready:
-            raise RuntimeError("Projections service is not ready for API calls after restart")
+            raise RuntimeError(
+                f"{msg_prefix} Projections service is not ready for API calls after restart"
+            )
 
     # Add the task to projections_task_map
     if projections_task_map.get(team_id, None) is None:
@@ -1278,4 +1283,8 @@ async def validate_project_for_ai_features(
 @to_thread
 def create_current_timestamp() -> str:
     """Create a timestamp in the format 'YYYY-MM-DDTHH:MM:SS.ssssssZ'."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

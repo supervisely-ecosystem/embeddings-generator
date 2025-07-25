@@ -72,7 +72,7 @@ async def create_projections(
     except Exception as e:
         message = f"{msg_prefix} Failed to start projections service: {str(e)}"
         sly.logger.error(message, exc_info=True)
-        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
+        return None, None
 
     projections = await send_request(
         api,
@@ -241,6 +241,9 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
             project_id,
             # image_ids=image_ids, #TODO add before release projections endpoints
         )
+        if image_infos is None or projections is None:
+            return image_infos, projections
+
         # save projections
         await save_projections(
             api,
