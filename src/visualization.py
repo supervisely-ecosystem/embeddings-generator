@@ -10,6 +10,7 @@ from supervisely.api.file_api import FileInfo
 import src.globals as g
 import src.qdrant as qdrant
 from src.pointcloud import download as download_pcd
+from src.pointcloud import remove_pcd_file
 from src.pointcloud import upload as upload_pcd
 from src.utils import (
     ImageInfoLite,
@@ -218,6 +219,8 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
     """
     if project_info is None:
         project_info = api.project.get_info_by_id(project_id)
+
+    pcd_info = None
     try:
         pcd_info: sly.api.pointcloud_api.PointcloudInfo = await get_pcd_info(
             api, project_id, project_info=project_info
@@ -227,6 +230,8 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
     else:
         if parse_timestamp(pcd_info.updated_at) < parse_timestamp(project_info.updated_at):
             sly.logger.debug("Projections are not up to date. Creating new projections.")
+            # Remove outdated PCD file before creating new one
+            await remove_pcd_file(api, pcd_info.id)
             pcd_info = None
 
     if pcd_info is None:
@@ -234,7 +239,7 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
         image_infos, projections = await create_projections(
             api,
             project_id,
-            # image_ids=image_ids, #! fix before enabling projections endpoints
+            # image_ids=image_ids, #TODO add before release projections endpoints
         )
         # save projections
         await save_projections(
@@ -248,3 +253,5 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
         image_infos, projections = await get_projections(
             api, project_id, project_info=project_info, pcd_info=pcd_info
         )
+
+    return image_infos, projections

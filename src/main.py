@@ -42,6 +42,7 @@ from src.utils import (
 )
 from src.visualization import (
     create_projections,
+    get_or_create_projections,
     get_or_create_projections_dataset,
     get_pcd_info,
     get_projections,
@@ -860,52 +861,80 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
 @app.event(Event.Projections, use_state=True)
 @timeit
 async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
-    # TODO: Remove this response and implement projections.
-    return JSONResponse({ResponseFields.MESSAGE: "Projections are not supported yet."})
-    project_info = await get_project_info(api, event.project_id)
-    pcd_info = None
+    """
+    Endpoint to get or create projections for a project.
+
+    This endpoint creates 2D projections of image embeddings for visualization purposes.
+    If projections already exist and are up to date, they will be returned.
+    If projections are outdated or don't exist, new ones will be created.
+
+    :param api: Supervisely API object.
+    :param event: Event object containing project_id and optional image_ids for filtering.
+
+    Example request:
+    data = {"project_id": <your-project-id>, "image_ids": [<image-id-1>, <image-id-2>, ...]}
+    response = httpx.post(
+        "http://<your-server-address>/projections",
+        json=data,
+        headers={"Authorization": f"Bearer {your_token}"}
+    )
+
+    Returns:
+    List[List[Dict]] - [image_infos, projections] where image_infos are filtered by event.image_ids if provided
+    """
     try:
-        pcd_info: sly.api.pointcloud_api.PointcloudInfo = await get_pcd_info(
-            api, event.project_id, project_info=project_info
-        )
-    except ValueError as e:
-        sly.logger.debug("Projections not found. Creating new projections.")
-    else:
-        if parse_timestamp(pcd_info.updated_at) < parse_timestamp(project_info.updated_at):
-            sly.logger.debug("Projections are not up to date. Creating new projections.")
-            pcd_info = None
-
-    if pcd_info is None:
-        # update embeddings
-        await update_embeddings(
-            api,
-            event.project_id,
-            force=False,
-            project_info=project_info,
+        msg_prefix = f"[Project: {event.project_id}]"
+        sly.logger.info(
+            f"{msg_prefix} Creating projections for project.",
+            extra={
+                "image_ids": event.image_ids,
+            },
         )
 
-        # create new projections
-        image_infos, projections = await create_projections(
-            api, event.project_id, image_ids=event.image_ids
+        # --------------------------- Step 0: Validate Project For AI Features --------------------------- #
+        project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
+        validation_error = await validate_project_for_ai_features(api, project_info, msg_prefix)
+        if validation_error:
+            return validation_error
+
+        # ------------------------------ Step 1: Check If Collection Exists ------------------------------ #
+        if await qdrant.collection_exists(event.project_id) is False:
+            message = f"{msg_prefix} Embeddings collection does not exist, projections are not possible. Create embeddings first. Disabling AI Search."
+            sly.logger.warning(message)
+            await clean_image_embeddings_updated_at(api, project_info.id)
+            api.project.disable_embeddings(project_info.id)
+            return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
+
+        # ----------------------- Step 2: Update Embeddings If Needed ------------------------ #
+        if not await embeddings_up_to_date(api, event.project_id):
+            sly.logger.debug(
+                f"{msg_prefix} Embeddings are not up to date. Updating embeddings before creating projections."
+            )
+            await update_embeddings(
+                api,
+                event.project_id,
+                force=False,
+                project_info=project_info,
+            )
+
+        # ----------------------- Step 3: Get Or Create Projections -------------------------- #
+        image_infos, projections = await get_or_create_projections(
+            api, event.project_id, project_info
         )
-        # save projections
-        await save_projections(
-            api,
-            project_id=event.project_id,
-            image_infos=image_infos,
-            projections=projections,
-            project_info=project_info,
-        )
-    else:
-        image_infos, projections = await get_projections(
-            api, event.project_id, project_info=project_info, pcd_info=pcd_info
-        )
-    indexes = []
-    for i, info in enumerate(image_infos):
-        if event.image_ids is None or info.id in event.image_ids:
-            indexes.append(i)
-    sly.logger.debug("Returning %d projections.", len(indexes))
-    return [[image_infos[i].to_json() for i in indexes], [projections[i] for i in indexes]]
+
+        # ------------------------ Step 4: Filter Results By Image IDs ---------------------- #
+        indexes = []
+        for i, info in enumerate(image_infos):
+            if event.image_ids is None or info.id in event.image_ids:
+                indexes.append(i)
+
+        sly.logger.info(f"{msg_prefix} Returning {len(indexes)} projections.")
+        return [[image_infos[i].to_json() for i in indexes], [projections[i] for i in indexes]]
+
+    except Exception as e:
+        message = f"{msg_prefix} Error during projections creation: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
 
 @server.post("/embeddings_up_to_date")
