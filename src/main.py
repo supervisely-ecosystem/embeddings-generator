@@ -459,7 +459,7 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
                 "sampling_method": event.sampling_method,
                 "sample_size": event.sample_size,
                 "clustering_method": event.clustering_method,
-                "num_clusters": event.sample_size,
+                "num_clusters": event.num_clusters,
                 "dataset_id": event.dataset_id,
                 "image_ids": event.image_ids,
             },
