@@ -184,7 +184,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 api,
                 event.project_id,
                 False,
-                error_message=message[len(f"{msg_prefix} "):],
+                error_message="Error while checking images for embeddings creation. Please contact instance administrator for more details.",
             )
             await clear_update_flag(api, event.project_id)
             # Remove task file on error
@@ -235,7 +235,9 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             except Exception as e:
                 message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
                 sly.logger.error(message, exc_info=True)
-                await cleanup_task_resources(error_message=message[len(f"{msg_prefix} ") :])
+                await cleanup_task_resources(
+                    error_message="Error while creating embeddings. Please contact instance administrator for more details."
+                )
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
         task = asyncio.create_task(execute())
@@ -245,7 +247,9 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
     except Exception as e:
         message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
         sly.logger.error(message, exc_info=True)
-        await cleanup_task_resources(error_message=message[len(f"{msg_prefix} ") :])
+        await cleanup_task_resources(
+            error_message="Error while creating embeddings. Please contact instance administrator for more details."
+        )
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
 
