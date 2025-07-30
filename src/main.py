@@ -1,6 +1,6 @@
 import asyncio
 import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import supervisely as sly
@@ -107,6 +107,12 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             },
         )
 
+        async def cleanup_task_resources(error_message: Optional[str] = None):
+            """Helper function to clean up task resources and reset project flags."""
+            await cleanup_task_and_flags(api, event.project_id, error_message)
+            # Remove task file when embeddings creation is complete or fails
+            await EmbeddingsTaskManager.remove_task_file(event.project_id)
+
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
 
         # --------------------------- Step 0: Validate Project For AI Features --------------------------- #
@@ -174,17 +180,16 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             message = f"{msg_prefix} Error while fetching images: {str(e)}"
             sly.logger.error(message, exc_info=True)
             # Only reset flags, don't clean background tasks here since no task was created yet
-            await set_embeddings_in_progress(api, event.project_id, False)
+            await set_embeddings_in_progress(
+                api,
+                event.project_id,
+                False,
+                error_message=message[len(f"{msg_prefix} "):],
+            )
             await clear_update_flag(api, event.project_id)
             # Remove task file on error
             await EmbeddingsTaskManager.remove_task_file(event.project_id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
-
-        async def cleanup_task_resources():
-            """Helper function to clean up task resources and reset project flags."""
-            await cleanup_task_and_flags(api, event.project_id)
-            # Remove task file when embeddings creation is complete or fails
-            await EmbeddingsTaskManager.remove_task_file(event.project_id)
 
         async def execute():
             try:
@@ -230,7 +235,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             except Exception as e:
                 message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
                 sly.logger.error(message, exc_info=True)
-                await cleanup_task_resources()
+                await cleanup_task_resources(error_message=message[len(f"{msg_prefix} ") :])
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
         task = asyncio.create_task(execute())
@@ -238,8 +243,9 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         g.background_tasks[task_id] = task
         return JSONResponse({ResponseFields.MESSAGE: f"{msg_prefix} Embeddings creation started."})
     except Exception as e:
-        message = f"{msg_prefix} Error during embeddings creation: {str(e)}"
+        message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
         sly.logger.error(message, exc_info=True)
+        await cleanup_task_resources(error_message=message[len(f"{msg_prefix} ") :])
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
 
