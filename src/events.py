@@ -169,3 +169,15 @@ class Event:
             return cls(
                 data.get(EventFields.PROJECT_ID),
             )
+
+    class ProcessingProgress:
+        endpoint = "/processing_progress"
+
+        def __init__(self, project_id: Optional[int] = None):
+            self.project_id = project_id
+
+        @classmethod
+        def from_json(cls, data: Dict[str, Any]):
+            return cls(
+                data.get(EventFields.PROJECT_ID),
+            )

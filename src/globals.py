@@ -64,7 +64,9 @@ sly.logger.info("Qdrant host: %s", qdrant_host)
 sly.logger.info("CLIP host from environment: %s", clip_host)
 sly.logger.info("Supervisely network server address: %s", net_server_address)
 if clip_host is not None and clip_host != "" and net_server_address is not None:
-    sly.logger.info("CLIP host is set and will be used instead of Supervisely network server address")
+    sly.logger.info(
+        "CLIP host is set and will be used instead of Supervisely network server address"
+    )
 
 # region constants
 IMAGE_SIZE_FOR_CLIP = 224
@@ -73,3 +75,7 @@ IMAGE_SIZE_FOR_CLIP = 224
 sly.logger.debug("Image size for CLIP: %s", IMAGE_SIZE_FOR_CLIP)
 
 background_tasks = {}
+
+# Dictionary to track progress of image processing by project_id
+# Format: {project_id: {"total": int, "current": int, "status": str}}
+image_processing_progress = {}
