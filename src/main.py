@@ -970,7 +970,7 @@ async def projections_up_to_date_endpoint(request: Request):
 
 
 @app.event(Event.ProcessingProgress, use_state=True)
-async def processing_progress_handler(event: Event.ProcessingProgress):
+async def processing_progress_handler(api: sly.Api, event: Event.ProcessingProgress):
     """Get processing progress for a project or all projects."""
     try:
         if event.project_id is not None:

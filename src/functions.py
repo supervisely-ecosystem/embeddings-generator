@@ -83,7 +83,7 @@ async def process_images(
             for image_batch in sly.batched(to_create):
                 # Download images as bytes and create Document objects
                 image_ids = [image_info.id for image_info in image_batch]
-                image_bytes_list = api.image.download_bytes_many_async(image_ids)
+                image_bytes_list = await api.image.download_bytes_many_async(image_ids)
 
                 # Create Document objects with blob data
                 queries = [Document(blob=image_bytes) for image_bytes in image_bytes_list]
