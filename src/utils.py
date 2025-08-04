@@ -116,6 +116,7 @@ class ResponseFields:
     BACKGROUND_TASK_ID = "background_task_id"
     RESULT = "result"
     IS_RUNNING = "is_running"
+    PROGRESS = "progress"
 
 
 class ResponseStatus:
@@ -422,9 +423,13 @@ def get_project_embeddings_updated_at(api: sly.Api, project_id: int) -> Optional
 
 @to_thread
 @timeit
-def set_embeddings_in_progress(api: sly.Api, project_id: int, in_progress: bool):
+def set_embeddings_in_progress(
+    api: sly.Api, project_id: int, in_progress: bool, error_message: Optional[str] = None
+):
     """Sets the embeddings in progress flag for the project."""
-    api.project.set_embeddings_in_progress(id=project_id, in_progress=in_progress)
+    api.project.set_embeddings_in_progress(
+        id=project_id, in_progress=in_progress, error_message=error_message
+    )
 
 
 @to_thread
@@ -1237,14 +1242,16 @@ def clear_update_flag(api: sly.Api, project_id: int):
         api.project.update_custom_data(project_id, custom_data, silent=True)
 
 
-async def cleanup_task_and_flags(api: sly.Api, project_id: int):
+async def cleanup_task_and_flags(
+    api: sly.Api, project_id: int, error_message: Optional[str] = None
+):
     """
     Helper function to clean up task resources and reset project flags.
     Used across multiple endpoints to avoid code duplication.
     """
     from src.globals import background_tasks
 
-    await set_embeddings_in_progress(api, project_id, False)
+    await set_embeddings_in_progress(api, project_id, False, error_message)
     await clear_update_flag(api, project_id)
     task_id = int(project_id)
     if task_id in background_tasks:
@@ -1286,3 +1293,69 @@ def disable_embeddings(api: sly.Api, project_id: int):
     """Disable embeddings for the project."""
     api.project.disable_embeddings(project_id)
     sly.logger.debug(f"[Project: {project_id}] Embeddings disabled.")
+
+
+@to_thread
+def set_processing_progress(
+    project_id: int, total: int, current: int = 0, status: str = "processing"
+):
+    """Set processing progress for a project.
+
+    :param project_id: Project ID
+    :param total: Total number of items to process
+    :param current: Current number of processed items
+    :param status: Status of processing (processing, completed, error)
+    """
+    import src.globals as g
+
+    g.image_processing_progress[project_id] = {"total": total, "current": current, "status": status}
+
+
+@to_thread
+def update_processing_progress(project_id: int, current: int, status: str = "processing"):
+    """Update current progress for a project.
+
+    :param project_id: Project ID
+    :param current: Current number of processed items
+    :param status: Status of processing (processing, completed, error)
+    """
+    import src.globals as g
+
+    if project_id in g.image_processing_progress:
+        g.image_processing_progress[project_id]["current"] = current
+        g.image_processing_progress[project_id]["status"] = status
+
+
+@to_thread
+def get_processing_progress(project_id: int) -> Optional[Dict]:
+    """Get processing progress for a project.
+
+    :param project_id: Project ID
+    :return: Dictionary with progress info or None if not found
+    """
+    import src.globals as g
+
+    return g.image_processing_progress.get(project_id, None)
+
+
+@to_thread
+def clear_processing_progress(project_id: int):
+    """Clear processing progress for a project.
+
+    :param project_id: Project ID
+    """
+    import src.globals as g
+
+    if project_id in g.image_processing_progress:
+        del g.image_processing_progress[project_id]
+
+
+@to_thread
+def get_all_processing_progress() -> Dict:
+    """Get processing progress for all projects.
+
+    :return: Dictionary with all projects progress
+    """
+    import src.globals as g
+
+    return g.image_processing_progress.copy()

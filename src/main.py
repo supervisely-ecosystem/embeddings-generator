@@ -1,6 +1,6 @@
 import asyncio
 import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import supervisely as sly
@@ -13,7 +13,7 @@ import src.globals as g
 import src.qdrant as qdrant
 from src.autorestart import EmbeddingsTaskManager
 from src.events import Event
-from src.functions import process_images, update_embeddings
+from src.functions import Document, process_images, update_embeddings
 from src.pointcloud import upload as upload_pcd
 
 # from src.search_cache import CollectionItem, SearchCache
@@ -30,9 +30,10 @@ from src.utils import (
     create_lite_image_infos,
     disable_embeddings,
     embeddings_up_to_date,
+    get_all_processing_progress,
+    get_processing_progress,
     get_project_info,
     image_get_list_async,
-    parse_timestamp,
     send_request,
     set_embeddings_in_progress,
     set_project_embeddings_updated_at,
@@ -107,6 +108,12 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             },
         )
 
+        async def cleanup_task_resources(error_message: Optional[str] = None):
+            """Helper function to clean up task resources and reset project flags."""
+            await cleanup_task_and_flags(api, event.project_id, error_message)
+            # Remove task file when embeddings creation is complete or fails
+            await EmbeddingsTaskManager.remove_task_file(event.project_id)
+
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
 
         # --------------------------- Step 0: Validate Project For AI Features --------------------------- #
@@ -174,17 +181,16 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             message = f"{msg_prefix} Error while fetching images: {str(e)}"
             sly.logger.error(message, exc_info=True)
             # Only reset flags, don't clean background tasks here since no task was created yet
-            await set_embeddings_in_progress(api, event.project_id, False)
+            await set_embeddings_in_progress(
+                api,
+                event.project_id,
+                False,
+                error_message="Error while checking images for embeddings creation. Please contact instance administrator for more details.",
+            )
             await clear_update_flag(api, event.project_id)
             # Remove task file on error
             await EmbeddingsTaskManager.remove_task_file(event.project_id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
-
-        async def cleanup_task_resources():
-            """Helper function to clean up task resources and reset project flags."""
-            await cleanup_task_and_flags(api, event.project_id)
-            # Remove task file when embeddings creation is complete or fails
-            await EmbeddingsTaskManager.remove_task_file(event.project_id)
 
         async def execute():
             try:
@@ -230,7 +236,9 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             except Exception as e:
                 message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
                 sly.logger.error(message, exc_info=True)
-                await cleanup_task_resources()
+                await cleanup_task_resources(
+                    error_message="Error while creating embeddings. Please contact instance administrator for more details."
+                )
                 return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
         task = asyncio.create_task(execute())
@@ -238,8 +246,11 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
         g.background_tasks[task_id] = task
         return JSONResponse({ResponseFields.MESSAGE: f"{msg_prefix} Embeddings creation started."})
     except Exception as e:
-        message = f"{msg_prefix} Error during embeddings creation: {str(e)}"
+        message = f"{msg_prefix} Error while creating embeddings: {str(e)}"
         sly.logger.error(message, exc_info=True)
+        await cleanup_task_resources(
+            error_message="Error while creating embeddings. Please contact instance administrator for more details."
+        )
         return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
 
 
@@ -307,7 +318,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         sly.logger.debug(f"{msg_prefix} Formatted text prompts: {text_prompts}")
 
-        image_urls = []
+        image_blobs = []
         # If request contains image IDs, get image URLs to add to the query.
         if event.by_image_ids:
             image_infos = await image_get_list_async(
@@ -325,10 +336,13 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             sly.logger.debug(
                 f"{msg_prefix} Request contains image IDs, obtained {len(lite_image_infos)} image infos. Will use their URLs for the query.",
             )
-            image_urls = [image_info.cas_url for image_info in lite_image_infos]
+            image_ids = [image_info.id for image_info in lite_image_infos]
+            image_bytes_list = await api.image.download_bytes_many_async(image_ids)
 
+            # Create Document objects with blob data
+            image_blobs = [Document(blob=image_bytes) for image_bytes in image_bytes_list]
         # Combine text prompts and image URLs to create a query.
-        queries = text_prompts + image_urls
+        queries = text_prompts + image_blobs
         sly.logger.debug(f"{msg_prefix} Final search query: {queries}")
 
         if len(queries) == 0:
@@ -953,3 +967,36 @@ async def projections_up_to_date_endpoint(request: Request):
     state = request.state.state
     project_id = state["project_id"]
     return await is_projections_up_to_date(g.api, project_id)
+
+
+@app.event(Event.ProcessingProgress, use_state=True)
+async def processing_progress_handler(api: sly.Api, event: Event.ProcessingProgress):
+    """Get processing progress for a project or all projects."""
+    try:
+        if event.project_id is not None:
+            # Get progress for specific project
+            progress = await get_processing_progress(event.project_id)
+            if progress is None:
+                return JSONResponse(
+                    {
+                        ResponseFields.MESSAGE: f"No processing progress found for project {event.project_id}",
+                        ResponseFields.PROGRESS: None,
+                    },
+                    status_code=200,
+                )
+            return JSONResponse({ResponseFields.PROGRESS: progress}, status_code=200)
+        else:
+            # Get progress for all projects
+            all_progress = await get_all_processing_progress()
+            return JSONResponse(
+                {
+                    ResponseFields.MESSAGE: "Project ID is not specified. Returning progress for all projects.",
+                    ResponseFields.PROGRESS: all_progress,
+                },
+                status_code=200,
+            )
+
+    except Exception as e:
+        message = f"Error getting processing progress: {str(e)}"
+        sly.logger.error(message, exc_info=True)
+        return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
