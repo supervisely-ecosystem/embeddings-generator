@@ -423,9 +423,13 @@ def get_project_embeddings_updated_at(api: sly.Api, project_id: int) -> Optional
 
 @to_thread
 @timeit
-def set_embeddings_in_progress(api: sly.Api, project_id: int, in_progress: bool):
+def set_embeddings_in_progress(
+    api: sly.Api, project_id: int, in_progress: bool, error_message: Optional[str] = None
+):
     """Sets the embeddings in progress flag for the project."""
-    api.project.set_embeddings_in_progress(id=project_id, in_progress=in_progress)
+    api.project.set_embeddings_in_progress(
+        id=project_id, in_progress=in_progress, error_message=error_message
+    )
 
 
 @to_thread
@@ -1247,7 +1251,7 @@ async def cleanup_task_and_flags(
     """
     from src.globals import background_tasks
 
-    await set_embeddings_in_progress(api, project_id, False)
+    await set_embeddings_in_progress(api, project_id, False, error_message)
     await clear_update_flag(api, project_id)
     task_id = int(project_id)
     if task_id in background_tasks:
@@ -1288,7 +1292,6 @@ def create_current_timestamp() -> str:
 def disable_embeddings(api: sly.Api, project_id: int):
     """Disable embeddings for the project."""
     api.project.disable_embeddings(project_id)
-    sly.logger.debug(f"[Project: {project_id}] Embeddings disabled.")
     sly.logger.debug(f"[Project: {project_id}] Embeddings disabled.")
 
 
