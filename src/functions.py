@@ -76,14 +76,14 @@ async def process_images(
 
         # Initialize progress tracking
         if total_progress > 0:
-            set_processing_progress(project_id, total_progress, 0, "processing")
+            await set_processing_progress(project_id, total_progress, 0, "processing")
 
         if len(to_create) > 0:
             logger.debug(f"{msg_prefix} Images to be vectorized: {total_progress}.")
             for image_batch in sly.batched(to_create):
                 # Download images as bytes and create Document objects
                 image_ids = [image_info.id for image_info in image_batch]
-                image_bytes_list = api.image.download_bytes(image_ids)
+                image_bytes_list = api.image.download_bytes_many_async(image_ids)
 
                 # Create Document objects with blob data
                 queries = [Document(blob=image_bytes) for image_bytes in image_bytes_list]
@@ -98,7 +98,7 @@ async def process_images(
                 current_progress += len(image_batch)
 
                 # Update progress
-                update_processing_progress(project_id, current_progress, "processing")
+                await update_processing_progress(project_id, current_progress, "processing")
 
                 logger.debug(
                     f"{msg_prefix} Upserted {len(vectors_batch)} vectors to Qdrant. [{current_progress}/{total_progress}]",
@@ -110,7 +110,7 @@ async def process_images(
 
             logger.debug(f"{msg_prefix} All {total_progress} images have been vectorized.")
             # Mark as completed
-            update_processing_progress(project_id, current_progress, "completed")
+            await update_processing_progress(project_id, current_progress, "completed")
 
         if len(to_delete) > 0:
             logger.debug(f"{msg_prefix} Vectors for images to be deleted: {len(to_delete)}.")
@@ -127,13 +127,13 @@ async def process_images(
         )
 
         await asyncio_sleep(1)  # Brief delay to allow final status to be read
-        clear_processing_progress(project_id)
+        await clear_processing_progress(project_id)
 
         return to_create, vectors
 
     except Exception as e:
         # Mark as error and log
-        update_processing_progress(project_id, current_progress, "error")
+        await update_processing_progress(project_id, current_progress, "error")
         logger.error(f"{msg_prefix} Error during image processing: {str(e)}")
         raise
 

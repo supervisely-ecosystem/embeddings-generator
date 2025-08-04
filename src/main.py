@@ -337,7 +337,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
                 f"{msg_prefix} Request contains image IDs, obtained {len(lite_image_infos)} image infos. Will use their URLs for the query.",
             )
             image_ids = [image_info.id for image_info in lite_image_infos]
-            image_bytes_list = api.image.download_bytes(image_ids)
+            image_bytes_list = await api.image.download_bytes_many_async(image_ids)
 
             # Create Document objects with blob data
             image_blobs = [Document(blob=image_bytes) for image_bytes in image_bytes_list]
@@ -975,7 +975,7 @@ async def processing_progress_handler(event: Event.ProcessingProgress):
     try:
         if event.project_id is not None:
             # Get progress for specific project
-            progress = get_processing_progress(event.project_id)
+            progress = await get_processing_progress(event.project_id)
             if progress is None:
                 return JSONResponse(
                     {
@@ -987,7 +987,7 @@ async def processing_progress_handler(event: Event.ProcessingProgress):
             return JSONResponse({ResponseFields.PROGRESS: progress}, status_code=200)
         else:
             # Get progress for all projects
-            all_progress = get_all_processing_progress()
+            all_progress = await get_all_processing_progress()
             return JSONResponse(
                 {
                     ResponseFields.MESSAGE: "Project ID is not specified. Returning progress for all projects.",

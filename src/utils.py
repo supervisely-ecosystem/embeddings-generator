@@ -1295,7 +1295,7 @@ def disable_embeddings(api: sly.Api, project_id: int):
     sly.logger.debug(f"[Project: {project_id}] Embeddings disabled.")
 
 
-# Progress tracking functions
+@to_thread
 def set_processing_progress(
     project_id: int, total: int, current: int = 0, status: str = "processing"
 ):
@@ -1311,6 +1311,7 @@ def set_processing_progress(
     g.image_processing_progress[project_id] = {"total": total, "current": current, "status": status}
 
 
+@to_thread
 def update_processing_progress(project_id: int, current: int, status: str = "processing"):
     """Update current progress for a project.
 
@@ -1325,6 +1326,7 @@ def update_processing_progress(project_id: int, current: int, status: str = "pro
         g.image_processing_progress[project_id]["status"] = status
 
 
+@to_thread
 def get_processing_progress(project_id: int) -> Optional[Dict]:
     """Get processing progress for a project.
 
@@ -1336,6 +1338,7 @@ def get_processing_progress(project_id: int) -> Optional[Dict]:
     return g.image_processing_progress.get(project_id, None)
 
 
+@to_thread
 def clear_processing_progress(project_id: int):
     """Clear processing progress for a project.
 
@@ -1347,6 +1350,7 @@ def clear_processing_progress(project_id: int):
         del g.image_processing_progress[project_id]
 
 
+@to_thread
 def get_all_processing_progress() -> Dict:
     """Get processing progress for all projects.
 
