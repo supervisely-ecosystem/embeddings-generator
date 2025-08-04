@@ -185,7 +185,16 @@ class CasUrlClient(CasClient):
         :rtype: List[np.ndarray]
         """
         vectors = await self.client.aencode(queries)
-        return vectors.tolist()
+
+        # Check if the result is a numpy array (when unboxed) or DocumentArray
+        if hasattr(vectors, "tolist"):
+            # It's already a numpy array (unboxed result)
+            return vectors.tolist()
+        elif hasattr(vectors, "embeddings"):
+            # It's a DocumentArray, get embeddings
+            return vectors.embeddings.tolist()
+        else:
+            raise ValueError(f"Unexpected result type from aencode: {type(vectors)}")
 
 
 def _init_client() -> Union[CasUrlClient, CasClient]:
