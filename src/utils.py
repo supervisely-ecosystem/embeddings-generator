@@ -521,9 +521,15 @@ async def create_lite_image_infos(
     :type cas_size: int
     :param image_infos: List of image infos to get lite version from.
     :type image_infos: List[sly.ImageInfo]
+    :param imgproxy_address: Imgproxy address to use for resizing images, if None, will use the full storage URL.
+    :type imgproxy_address: Optional[str], optional
     :return: List of lite version of image infos.
     :rtype: List[ImageInfoLite]
     """
+    if imgproxy_address is not None:
+        sly.logger.debug(
+            "Imgproxy address is set to %s while creating lite image infos", imgproxy_address
+        )
     if not image_infos or len(image_infos) == 0:
         return []
     if isinstance(image_infos[0], ImageInfoLite):
@@ -557,6 +563,7 @@ async def get_lite_image_infos(
     dataset_id: int = None,
     image_ids: List[int] = None,
     image_infos: List[sly.ImageInfo] = None,
+    imgproxy_address: Optional[str] = None,
 ) -> List[ImageInfoLite]:
     """Returns lite version of image infos to cut off unnecessary data.
     Uses either dataset_id or image_ids to get image infos.
@@ -575,6 +582,8 @@ async def get_lite_image_infos(
     :type image_ids: List[int], optional
     :param image_infos: List of image infos to get lite version from.
     :type image_infos: List[sly.ImageInfo], optional
+    :param imgproxy_address: Imgproxy address to use for resizing images, if None, will use the full storage URL.
+    :type imgproxy_address: Optional[str], optional
     :return: List of lite version of image infos.
     :rtype: List[ImageInfoLite]
     """
@@ -583,7 +592,9 @@ async def get_lite_image_infos(
 
     if len(image_infos) == 0:
         return []
-    image_infos = await create_lite_image_infos(cas_size, image_infos)
+    image_infos = await create_lite_image_infos(
+        cas_size, image_infos, imgproxy_address=imgproxy_address
+    )
     return image_infos
 
 
@@ -1453,6 +1464,7 @@ async def download_resized_images(image_urls: List[str]) -> List[bytes]:
     # Create semaphore to limit concurrent downloads
     semaphore = asyncio.Semaphore(concurrency)
 
+    @with_retries()
     async def download_single_image(session: aiohttp.ClientSession, url: str) -> bytes:
         """Download a single image with semaphore protection."""
         async with semaphore:

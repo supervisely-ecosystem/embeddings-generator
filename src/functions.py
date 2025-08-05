@@ -64,6 +64,7 @@ async def process_images(
         to_create = await create_lite_image_infos(
             cas_size=g.IMAGE_SIZE_FOR_CLIP,
             image_infos=to_create,
+            imgproxy_address=g.imgproxy_address,
         )
 
         # if await qdrant.collection_exists(project_id):
