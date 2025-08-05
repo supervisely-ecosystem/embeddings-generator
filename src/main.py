@@ -29,6 +29,7 @@ from src.utils import (
     create_current_timestamp,
     create_lite_image_infos,
     disable_embeddings,
+    download_resized_images,
     embeddings_up_to_date,
     get_all_processing_progress,
     get_processing_progress,
@@ -332,12 +333,14 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             lite_image_infos = await create_lite_image_infos(
                 cas_size=g.IMAGE_SIZE_FOR_CLIP,
                 image_infos=image_infos,
+                imgproxy_address=g.imgproxy_address,
             )
             sly.logger.debug(
                 f"{msg_prefix} Request contains image IDs, obtained {len(lite_image_infos)} image infos. Will use their URLs for the query.",
             )
-            image_ids = [image_info.id for image_info in lite_image_infos]
-            image_bytes_list = await api.image.download_bytes_many_async(image_ids)
+
+            image_urls = [image_info.cas_url for image_info in lite_image_infos]
+            image_bytes_list = await download_resized_images(image_urls)
 
             # Create Document objects with blob data
             image_blobs = [Document(blob=image_bytes) for image_bytes in image_bytes_list]

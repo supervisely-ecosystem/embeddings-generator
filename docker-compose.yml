@@ -18,6 +18,8 @@ services:
       API_TOKEN: "${API_TOKEN}" # you could set token for both publick and internal addresses, in case of internal address it will skip retrieving token from the server
       QDRANT_HOST: "${QDRANT_HOST}"
       CLIP_HOST: "${CLIP_HOST}" # CLIP application service, dont pass anything to search any available app instance automatically
+      IMGPROXY_ADDRESS: "${IMGPROXY_ADDRESS}" # Imgproxy service, e.g. http://imgproxy/
+      IMGPROXY_CONCURRENCY: "${IMGPROXY_CONCURRENCY}" # concurrency for Imgproxy service
     labels:
       proxy.app: embeddings-generator
       supervisely.logs.app: embeddings-generator-logs

@@ -54,6 +54,8 @@ sly.logger.debug("Connected to Supervisely API: %s", api.server_address)
 qdrant_host = os.getenv("QDRANT_HOST")
 clip_host = os.getenv("CLIP_HOST", None)
 net_server_address = os.getenv("SUPERVISELY_NET_SERVER_ADDRESS", None)
+imgproxy_address = os.getenv("IMGPROXY_ADDRESS", None)
+imgproxy_concurrency = os.getenv("IMGPROXY_CONCURRENCY", 2)
 # endregion
 
 if not qdrant_host:
@@ -67,6 +69,8 @@ if clip_host is not None and clip_host != "" and net_server_address is not None:
     sly.logger.info(
         "CLIP host is set and will be used instead of Supervisely network server address"
     )
+sly.logger.info("Imgproxy address: %s", imgproxy_address)
+sly.logger.info("Imgproxy concurrency: %s", imgproxy_concurrency)
 
 # region constants
 IMAGE_SIZE_FOR_CLIP = 224
