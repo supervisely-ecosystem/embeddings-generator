@@ -69,6 +69,8 @@ if clip_host is not None and clip_host != "" and net_server_address is not None:
     sly.logger.info(
         "CLIP host is set and will be used instead of Supervisely network server address"
     )
+sly.logger.info("Imgproxy address: %s", imgproxy_address)
+sly.logger.info("Imgproxy concurrency: %s", imgproxy_concurrency)
 
 # region constants
 IMAGE_SIZE_FOR_CLIP = 224
