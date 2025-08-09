@@ -46,6 +46,12 @@ def get_projections_pcd_name():
     return "pcd_2_dim.pcd"
 
 
+def random_color():
+    import random
+
+    return [random.randint(0, 255) for _ in range(3)]
+
+
 @timeit
 async def create_projections(
     api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
@@ -91,7 +97,14 @@ async def create_projections(
         retries=3,
         raise_error=True,
     )
-    return image_infos_result, projections
+    import numpy as np
+    from sklearn.cluster import KMeans
+
+    n_clusters = min(8, len(projections))
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    cluster_labels = kmeans.fit_predict(np.array(projections))
+
+    return image_infos_result, projections, cluster_labels.tolist()
 
 
 @timeit
@@ -103,9 +116,29 @@ async def save_projections(
     project_info: Optional[sly.ProjectInfo] = None,
     cluster_labels: List[int] = None,
 ):
-    """Saves projections to a PCD file and uploads it to the point cloud project."""
+    """Saves projections to a PCD file and uploads it to the point cloud project.
+
+    :param api: Supervisely API instance
+    :param project_id: ID of the project to which projections belong
+    :param image_infos: List of image information objects containing image IDs and other metadata
+    :param projections: List of 2D projection vectors corresponding to the images
+    :param project_info: Optional project information object, if not provided it will be fetched
+    :param cluster_labels: object_ids
+    """
+    from supervisely.project.project_meta import ProjectMeta
+
     if project_info is None:
         project_info = await get_project_info(api, project_id)
+
+    project_meta = api.project.get_meta(project_info.id)
+    meta = ProjectMeta.from_json(project_meta)
+    class_colors = {}
+    for class_info in meta.obj_classes:
+        if class_info.color is not None:
+            class_colors[class_info.name] = class_info.color
+    colors = [
+        class_colors.get(str(cluster_label), random_color()) for cluster_label in cluster_labels
+    ]
     pcd_dataset_info = await get_or_create_projections_dataset(
         api, project_info.id, image_project_info=project_info
     )
@@ -117,6 +150,7 @@ async def save_projections(
         get_projections_pcd_name(),
         pcd_dataset_info.id,
         cluster_labels,
+        colors=colors,
     )
     return pcd_info
 
@@ -171,6 +205,7 @@ async def get_projections(
 
     pcd = await download_pcd(api, pcd_info.id)
     vectors = pcd.points[:, :2]
+    cluster_labels = pcd.cluster_ids
     image_ids = pcd.image_ids
     image_infos = await get_lite_image_infos(
         api,
@@ -179,7 +214,7 @@ async def get_projections(
         image_ids=image_ids,
         imgproxy_address=g.imgproxy_address,
     )
-    return image_infos, vectors.tolist()
+    return image_infos, vectors.tolist(), cluster_labels.tolist()
 
 
 async def get_or_create_projections_dataset(
@@ -248,7 +283,7 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
 
     if pcd_info is None:
         # create new projections
-        image_infos, projections = await create_projections(
+        image_infos, projections, cluster_labels = await create_projections(
             api,
             project_id,
             # image_ids=image_ids, #TODO add before release projections endpoints
@@ -263,10 +298,11 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
             image_infos=image_infos,
             projections=projections,
             project_info=project_info,
+            cluster_labels=cluster_labels,
         )
     else:
-        image_infos, projections = await get_projections(
+        image_infos, projections, cluster_labels = await get_projections(
             api, project_id, project_info=project_info, pcd_info=pcd_info
         )
 
-    return image_infos, projections
+    return image_infos, projections, cluster_labels
