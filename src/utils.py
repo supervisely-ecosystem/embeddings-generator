@@ -14,7 +14,8 @@ import aiohttp
 import supervisely as sly
 from supervisely._utils import batched
 from supervisely.api.app_api import SessionInfo
-from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
 PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
@@ -27,8 +28,10 @@ class TupleFields:
     ID = "id"
     HASH = "hash"
     LINK = "link"
+    IMAGE_ID = "image_id"
     DATASET_ID = "dataset_id"
     PROJECT_ID = "project_id"
+    CLASS_ID = "class_id"
     FULL_URL = "full_url"
     CAS_URL = "cas_url"
     HDF5_URL = "hdf5_url"
@@ -41,6 +44,7 @@ class TupleFields:
     VECTOR = "vector"
     IMAGES = "images"
     SCORE = "score"
+    BBOX = "bbox"
 
 
 class QdrantFields:
@@ -169,6 +173,44 @@ class ImageInfoLite:
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             updated_at=data[TupleFields.UPDATED_AT],
+            score=data.get(TupleFields.SCORE, None),
+        )
+
+
+@dataclass
+class ObjectInfoLite:
+    id: int
+    image_id: int
+    dataset_id: int
+    class_id: Dict
+    bbox: List[int]
+    image_url: str
+    cas_url: str
+    score: float = None
+
+    def to_json(self):
+        return {
+            TupleFields.ID: self.id,
+            TupleFields.IMAGE_ID: self.image_id,
+            TupleFields.DATASET_ID: self.dataset_id,
+            TupleFields.CLASS_ID: self.class_id,
+            TupleFields.BBOX: self.bbox,
+            TupleFields.FULL_URL: self.image_url,
+            TupleFields.CAS_URL: self.cas_url,
+            TupleFields.SCORE: self.score,
+        }
+        # Alternative: return asdict(self)  # if field names match keys
+
+    @classmethod
+    def from_json(cls, data: dict):
+        return cls(
+            id=data[TupleFields.ID],
+            image_id=data[TupleFields.IMAGE_ID],
+            dataset_id=data[TupleFields.DATASET_ID],
+            class_id=data[TupleFields.CLASS_ID],
+            bbox=data[TupleFields.BBOX],
+            image_url=data[TupleFields.FULL_URL],
+            cas_url=data[TupleFields.CAS_URL],
             score=data.get(TupleFields.SCORE, None),
         )
 
@@ -596,6 +638,216 @@ async def get_lite_image_infos(
         cas_size, image_infos, imgproxy_address=imgproxy_address
     )
     return image_infos
+
+
+def crop_and_resize_image_url(
+    full_storage_url: str,
+    imgproxy_address: Optional[str] = None,
+    ext: Literal["jpeg", "png"] = "jpeg",
+    method: Literal["fit", "fill", "fill-down", "force", "auto"] = "auto",
+    width: int = 0,
+    height: int = 0,
+    quality: int = 70,
+    bbox: Optional[List[int]] = None,
+) -> str:
+    """Returns a URL to a resized image with given parameters.
+    Default sizes are 0, which means that the image will not be resized,
+    just compressed if the extension is jpeg to the given quality.
+    Learn more about resize parameters `here <https://docs.imgproxy.net/usage/processing#resize>`_.
+
+    :param full_storage_url: Full Image storage URL, can be obtained from ImageInfo.
+    :type full_storage_url: str
+    :param ext: Image extension, jpeg or png.
+    :type ext: Literal["jpeg", "png"], optional
+    :param method: Resize type, fit, fill, fill-down, force, auto.
+    :type method: Literal["fit", "fill", "fill-down", "force", "auto"], optional
+    :param width: Width of the resized image.
+    :type width: int, optional
+    :param height: Height of the resized image.
+    :type height: int, optional
+    :param quality: Quality of the resized image.
+    :type quality: int, optional
+    :param bbox: Bounding box coordinates [top, left, bottom, right] for cropping.
+    :type bbox: Optional[List[int]], optional
+    :return: Full URL to a resized image.
+    :rtype: str
+
+    :Usage example:
+
+    .. code-block:: python
+
+        import supervisely as sly
+        from supervisely_utils import resize_image_url
+
+        api = sly.Api(server_address, token)
+
+        image_id = 376729
+        img_info = api.image.get_info_by_id(image_id)
+
+        img_resized_url = resize_image_url(
+            img_info.full_storage_url, ext="jpeg", method="fill", width=512, height=256)
+        print(img_resized_url)
+        # Output: https://app.supervisely.com/previews/q/ext:jpeg/resize:fill:512:256:0/q:70/plain/h5un6l2bnaz1vj8a9qgms4-public/images/original/2/X/Re/<image_name>.jpg
+    """
+    # original url example: https://app.supervisely.com/h5un6l2bnaz1vj8a9qgms4-public/images/original/2/X/Re/<image_name>.jpg
+    # resized url example:  https://app.supervisely.com/previews/q/ext:jpeg/resize:fill:300:0:0/q:70/plain/h5un6l2bnaz1vj8a9qgms4-public/images/original/2/X/Re/<image_name>.jpg
+    # cropped and resized url example: https://app.supervisely.com/previews/q/ext:jpeg/crop:100:100:fp:0.5:0.5/resize:fill:300:0:0/q:70/plain/h5un6l2bnaz1vj8a9qgms4-public/images/original/2/X/Re/<image_name>.jpg
+    # to add: previews/q/ext:jpeg/crop:width:height:fp:center_x:center_y/resize:fill:300:0:0/q:70/plain/
+    try:
+        parsed_url = urllib.parse.urlparse(full_storage_url)
+        server_address = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+        # Build processing string
+        processing_parts = [f"q/ext:{ext}"]
+        
+        # Add crop if bbox is provided [top, left, bottom, right]
+        if bbox and len(bbox) == 4:
+            top, left, bottom, right = bbox
+            bbox_width = right - left
+            bbox_height = bottom - top
+            
+            # Calculate 10% padding from each dimension separately
+            padding_x = int(bbox_width * 0.1)
+            padding_y = int(bbox_height * 0.1)
+            
+            # Apply padding to get final crop dimensions
+            crop_left = max(0, left - padding_x)
+            crop_top = max(0, top - padding_y)
+            crop_right = right + padding_x
+            crop_bottom = bottom + padding_y
+            
+            crop_width = crop_right - crop_left
+            crop_height = crop_bottom - crop_top
+            
+            # Calculate relative center coordinates (0.0 to 1.0)
+            center_x = (crop_left + crop_width / 2)
+            center_y = (crop_top + crop_height / 2)
+            processing_parts.append(f"crop:{crop_width}:{crop_height}:fp:{center_x}:{center_y}")
+        
+        # Add resize
+        processing_parts.append(f"resize:{method}:{width}:{height}:0")
+        processing_parts.append(f"q:{quality}")
+        processing_parts.append("plain")
+        
+        processing_string = "/".join(processing_parts)
+        
+        # Determine base address for imgproxy
+        if imgproxy_address:
+            # Remove trailing slash if present
+            imgproxy_address = imgproxy_address.rstrip("/")
+            base_address = imgproxy_address
+        else:
+            base_address = f"{server_address}/previews"
+
+        url = full_storage_url.replace(server_address, f"{base_address}/{processing_string}")
+        return url
+    except Exception as e:
+        sly.logger.debug(f"Failed to crop and resize image with url: {full_storage_url}: {repr(e)}")
+        return full_storage_url
+    
+@timeit
+async def create_lite_object_infos(
+    cas_size: int,
+    object_infos: Dict[int, List[sly.FigureInfo]],
+    image_infos: List[sly.ImageInfo],
+    imgproxy_address: Optional[str] = None,
+) -> List[ObjectInfoLite]:
+    """Returns lite version of object infos to cut off unnecessary data.
+
+    :param cas_size: Size of the image for CLIP, it will be added to URL.
+    :type cas_size: int
+    :param object_infos: Dictionary of object infos to get lite version from.
+    :type object_infos: Dict[int, List[sly.FigureInfo]]
+    :param imgproxy_address: Imgproxy address to use for resizing images, if None, will use the full storage URL.
+    :type imgproxy_address: Optional[str], optional
+    :return: List of lite version of object infos.
+    :rtype: List[ObjectInfoLite]
+    """
+    if imgproxy_address is not None:
+        sly.logger.debug(
+            "Imgproxy address is set to %s while creating lite object infos", imgproxy_address
+        )
+    if not object_infos or len(object_infos) == 0:
+        return []
+
+    image_urls = {image_info.id: image_info.full_storage_url for image_info in image_infos}
+    objects_list = []
+    for img_id, object_infos in object_infos.items():
+        if not object_infos:
+            continue
+        project_id = object_infos[0].project_id
+        image_url = image_urls.get(img_id)
+        if image_url is None:
+            sly.logger.warning(
+                f"[Project: {project_id}] Image with ID {img_id} not found in image infos while creating lite object infos"
+            )
+            continue
+
+        for obj_info in object_infos:
+            obj_info: sly.FigureInfo
+            cas_url = crop_and_resize_image_url(
+                full_storage_url=image_url,
+                imgproxy_address=imgproxy_address,
+                method="fit",
+                width=cas_size,
+                height=cas_size,
+            )
+            objects_list.append(
+                ObjectInfoLite(
+                    id=obj_info.id,
+                    image_id=obj_info.entity_id,
+                    dataset_id=obj_info.dataset_id,
+                    class_id=obj_info.class_id,
+                    bbox=obj_info.meta.get("bbox", []),
+                    image_url=image_url,
+                    cas_url=cas_url,
+                )
+            )
+    return objects_list
+
+
+@timeit
+async def get_lite_object_infos(
+    api: sly.Api,
+    cas_size: int,
+    dataset_id: int,
+    image_ids: List[int] = None,
+    object_infos: List[Dict] = None,
+    imgproxy_address: Optional[str] = None,
+) -> List[ObjectInfoLite]:
+    """Returns lite version of object infos to cut off unnecessary data.
+    Uses either dataset_id or object_ids to get object infos.
+    If dataset_id is provided, it will be used to get all objects from the dataset.
+    If object_ids are provided, they will be used to get object infos.
+
+    :param api: Instance of supervisely API.
+    :type api: sly.Api
+    :param cas_size: Size of the image for CLIP, it will be added to URL.
+    :type cas_size: int
+    :param project_id: ID of the project to get objects from.
+    :type project_id: int
+    :param dataset_id: ID of the dataset to get objects from.
+    :type dataset_id: int, optional
+    :param object_ids: List of object IDs to get object infos.
+    :type object_ids: List[int], optional
+    :param object_infos: List of object infos to get lite version from.
+    :type object_infos: List[Dict], optional
+    :param imgproxy_address: Imgproxy address to use for resizing images, if None, will use the full storage URL.
+    :type imgproxy_address: Optional[str], optional
+    :return: List of lite version of object infos.
+    :rtype: List[ObjectInfoLite]
+    """
+    if not object_infos or len(object_infos) == 0:
+        object_infos = await api.image.figure.download_async(
+            api, dataset_id, image_ids, skip_geometry=True
+        )
+
+    if len(object_infos) == 0:
+        return []
+    object_infos = await create_lite_object_infos(
+        cas_size, object_infos, imgproxy_address=imgproxy_address
+    )
+    return object_infos
 
 
 def parse_timestamp(
@@ -1484,4 +1736,11 @@ async def download_resized_images(image_urls: List[str]) -> List[bytes]:
         # Wait for all downloads to complete
         image_bytes_list = await asyncio.gather(*tasks)
 
+        return image_bytes_list
+        return image_bytes_list
+        return image_bytes_list
+        return image_bytes_list
+        return image_bytes_list
+        return image_bytes_list
+        return image_bytes_list
         return image_bytes_list
