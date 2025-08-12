@@ -61,7 +61,7 @@ async def create_projections(
     project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
-    objects: bool = False,
+    objects: bool = True,
 ) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[List[float]]]:
 
     msg_prefix = f"[Project: {project_id}]"
@@ -86,13 +86,16 @@ async def create_projections(
 
         item_ids = []
         for dataset_id, image_infos in ds_img_map.items():
-            figure_infos = await api.image.figure.download_async(
-                dataset_id=dataset_id,
-                image_ids=[image_info.id for image_info in image_infos],
-                skip_geometry=True,
-            )
-            figure_ids = [figure_info.id for figure_info in figure_infos]
-            item_ids.extend(figure_ids)
+            ds_image_ids = [image_info.id for image_info in image_infos]
+            for batch in sly.batched(ds_image_ids, batch_size=300):
+                figures = await api.image.figure.download_async(
+                    dataset_id=dataset_id,
+                    image_ids=batch,
+                    skip_geometry=True,
+                )
+                for _, figure_infos in figures.items():
+                    figure_ids = [figure_info.id for figure_info in figure_infos]
+                    item_ids.extend(figure_ids)
     else:
         item_ids = [info.id for info in image_infos]
 
@@ -178,7 +181,7 @@ async def save_projections(
         image_ids=image_ids,
         pcd_name=get_projections_pcd_name(),
         dataset_id=pcd_dataset_info.id,
-        cluster_ids=object_ids,
+        object_ids=object_ids,
     )
     return pcd_info
 
@@ -209,7 +212,7 @@ async def get_pcd_info(
         api, pcd_dataset_info.id, get_projections_pcd_name()
     )
     if pcd_item_info is None:
-        raise ValueError("PCD with projections not found: pcd_2_dim.pcd")
+        sly.logger.debug(f"[Project: {project_id}] PCD with projections not found: pcd_2_dim.pcd")
     return pcd_item_info
 
 
@@ -230,6 +233,9 @@ async def get_projections(
         if project_info is None:
             project_info = await get_project_info(api, project_id)
         pcd_info = await get_pcd_info(api, project_id, project_info)
+
+    if pcd_info is None:
+        raise ValueError(f"Point cloud data not found for project {project_id}.")
 
     pcd = await download_pcd(api, pcd_info.id)
     vectors = pcd.points[:, :2]
@@ -289,6 +295,8 @@ async def is_projections_up_to_date(
         pcd_info = await get_pcd_info(api, project_id)
     except ValueError:
         return False
+    if pcd_info is None:
+        return False
     if project_info is None:
         project_info = await get_project_info(api, project_id)
     return parse_timestamp(pcd_info.updated_at) >= parse_timestamp(project_info.updated_at)
@@ -302,6 +310,7 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
     If projections don't exist or are outdated (project was updated after projections
     were created), new projections will be generated.
     """
+    replace = False
     if project_info is None:
         project_info = api.project.get_info_by_id(project_id)
 
@@ -313,12 +322,15 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
     except ValueError as e:
         sly.logger.debug("Projections not found. Creating new projections.")
     else:
-        if parse_timestamp(pcd_info.updated_at) < parse_timestamp(project_info.updated_at):
+        if pcd_info is not None and parse_timestamp(pcd_info.updated_at) < parse_timestamp(
+            project_info.updated_at
+        ):
             sly.logger.debug("Projections are not up to date. Creating new projections.")
             # Remove outdated PCD file before creating new one
             await remove_pcd_file(api, pcd_info.id)
             pcd_info = None
         else:
+            pcd_info = None
             replace = True  #! remove after testing
 
     if pcd_info is None:

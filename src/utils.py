@@ -183,8 +183,8 @@ class ObjectInfoLite:
     image_id: int
     dataset_id: int
     class_id: Dict
-    bbox: List[int]
-    image_url: str
+    # bbox: List[int]
+    full_url: str
     cas_url: str
     score: float = None
 
@@ -194,8 +194,8 @@ class ObjectInfoLite:
             TupleFields.IMAGE_ID: self.image_id,
             TupleFields.DATASET_ID: self.dataset_id,
             TupleFields.CLASS_ID: self.class_id,
-            TupleFields.BBOX: self.bbox,
-            TupleFields.FULL_URL: self.image_url,
+            # TupleFields.BBOX: self.bbox,
+            TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.SCORE: self.score,
         }
@@ -208,8 +208,8 @@ class ObjectInfoLite:
             image_id=data[TupleFields.IMAGE_ID],
             dataset_id=data[TupleFields.DATASET_ID],
             class_id=data[TupleFields.CLASS_ID],
-            bbox=data[TupleFields.BBOX],
-            image_url=data[TupleFields.FULL_URL],
+            # bbox=data[TupleFields.BBOX],
+            full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             score=data.get(TupleFields.SCORE, None),
         )
@@ -645,13 +645,14 @@ async def get_lite_image_infos(
 
 def crop_and_resize_image_url(
     full_storage_url: str,
+    image_sizes: Optional[tuple],
     imgproxy_address: Optional[str] = None,
     ext: Literal["jpeg", "png"] = "jpeg",
     method: Literal["fit", "fill", "fill-down", "force", "auto"] = "auto",
     width: int = 0,
     height: int = 0,
     quality: int = 70,
-    bbox: Optional[List[int]] = None,
+    bbox: sly.Rectangle = None,
 ) -> str:
     """Returns a URL to a resized image with given parameters.
     Default sizes are 0, which means that the image will not be resized,
@@ -660,6 +661,8 @@ def crop_and_resize_image_url(
 
     :param full_storage_url: Full Image storage URL, can be obtained from ImageInfo.
     :type full_storage_url: str
+    :param image_sizes: Optional tuple containing (width, height) of the image.
+    :type image_sizes: Optional[tuple], optional
     :param ext: Image extension, jpeg or png.
     :type ext: Literal["jpeg", "png"], optional
     :param method: Resize type, fit, fill, fill-down, force, auto.
@@ -700,12 +703,14 @@ def crop_and_resize_image_url(
         parsed_url = urllib.parse.urlparse(full_storage_url)
         server_address = f"{parsed_url.scheme}://{parsed_url.netloc}"
 
+        image_width, image_height = image_sizes
+
         # Build processing string
         processing_parts = [f"q/ext:{ext}"]
 
         # Add crop if bbox is provided [top, left, bottom, right]
-        if bbox and len(bbox) == 4:
-            top, left, bottom, right = bbox
+        if bbox is not None:
+            top, left, bottom, right = bbox.top, bbox.left, bbox.bottom, bbox.right
             bbox_width = right - left
             bbox_height = bottom - top
 
@@ -723,8 +728,8 @@ def crop_and_resize_image_url(
             crop_height = crop_bottom - crop_top
 
             # Calculate relative center coordinates (0.0 to 1.0)
-            center_x = crop_left + crop_width / 2
-            center_y = crop_top + crop_height / 2
+            center_x = (crop_left + crop_width / 2) / image_width
+            center_y = (crop_top + crop_height / 2) / image_height
             processing_parts.append(f"crop:{crop_width}:{crop_height}:fp:{center_x}:{center_y}")
 
         # Add resize
@@ -775,16 +780,14 @@ async def create_lite_object_infos(
         return []
 
     image_urls = {image_info.id: image_info.full_storage_url for image_info in image_infos}
+    image_sizes_w_h = {
+        image_info.id: (image_info.width, image_info.height) for image_info in image_infos
+    }
     objects_list = []
-    progress = sly.tqdm.tqdm(
-        total=len(object_infos),
-        desc=f"[Project: {obj_info.project_id}] Creating lite object infos",
-        unit="object",
-        leave=False,
-    )
     for obj_info in object_infos:
         obj_info: sly.FigureInfo
         image_url = image_urls.get(obj_info.entity_id)
+        image_sizes = image_sizes_w_h.get(obj_info.entity_id)
         if image_url is None:
             sly.logger.warning(
                 f"[Project: {obj_info.project_id}] Image with ID {obj_info.entity_id} not found in image infos while creating lite object infos"
@@ -793,10 +796,12 @@ async def create_lite_object_infos(
 
         cas_url = crop_and_resize_image_url(
             full_storage_url=image_url,
+            image_sizes=image_sizes,
             imgproxy_address=imgproxy_address,
             method="fit",
             width=cas_size,
             height=cas_size,
+            bbox=obj_info.bbox,
         )
 
         objects_list.append(
@@ -805,12 +810,11 @@ async def create_lite_object_infos(
                 image_id=obj_info.entity_id,
                 dataset_id=obj_info.dataset_id,
                 class_id=obj_info.class_id,
-                bbox=obj_info.bbox,
-                image_url=image_url,
+                # bbox=obj_info.bbox,
+                full_url=image_url,
                 cas_url=cas_url,
             )
         )
-        progress.update(1)
     return objects_list
 
 

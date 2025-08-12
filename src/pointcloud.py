@@ -102,7 +102,6 @@ class EmbeddingsVisPCD:
                 raise ValueError(f"{field_name} and points must have the same length")
             if not isinstance(items, np.ndarray):
                 items = np.array(items, dtype=dtype)
-        self._image_ids = items
         setattr(self, f"_{field_name}", items)
 
     @property
@@ -205,6 +204,7 @@ def upload(
     pcd_name: str,
     dataset_id: int,
     cluster_ids: List[int] = None,
+    object_ids: List[int] = None,
     colors: List = None,
 ) -> sly.api.pointcloud_api.PointcloudInfo:
     if not isinstance(pointcloud, np.ndarray):
@@ -212,7 +212,13 @@ def upload(
     if pointcloud.shape[1] == 2:
         pointcloud = np.hstack((pointcloud, np.zeros((pointcloud.shape[0], 1), dtype=np.float32)))
 
-    pcd = EmbeddingsVisPCD(pointcloud, image_ids=image_ids, cluster_ids=cluster_ids, colors=colors)
+    pcd = EmbeddingsVisPCD(
+        pointcloud,
+        image_ids=image_ids,
+        object_ids=object_ids,
+        cluster_ids=cluster_ids,
+        colors=colors,
+    )
     tmp = tempfile.NamedTemporaryFile("w+b", suffix=".pcd", delete=False)
     try:
         pcd.save(tmp.name)
