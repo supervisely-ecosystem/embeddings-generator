@@ -54,7 +54,7 @@ class ProjectCollectionManager:
         collection_items = []
         for info in results:
             meta = CollectionItem.Meta(score=info.score) if info.score is not None else None
-            collection_items.append(CollectionItem(entity_id=info.id, meta=meta))
+            collection_items.append(CollectionItem(entity_id=info.image_id, meta=meta))
 
         self.collection_id = self.api.entities_collection.create(
             project_id=self.project_id,
@@ -106,7 +106,9 @@ class AiSearchCollectionManager(ProjectCollectionManager):
     This class handles the creation, saving, checking, and removal of collections
     that cache search results for a specific project.
     """
+
     SYSTEM_NAME_PREFIX = "AI Search Collection: "
+
 
 class DiverseCollectionManager(ProjectCollectionManager):
     """
@@ -114,4 +116,5 @@ class DiverseCollectionManager(ProjectCollectionManager):
     This class handles the creation, saving, checking, and removal of collections
     that cache search results for a specific project.
     """
+
     SYSTEM_NAME_PREFIX = "Diverse Collection: "

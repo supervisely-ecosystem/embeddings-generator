@@ -21,6 +21,7 @@ from qdrant_client.models import (
 import src.globals as g
 from src.utils import (
     ImageInfoLite,
+    ObjectInfoLite,
     QdrantFields,
     ResponseFields,
     TupleFields,
@@ -161,19 +162,19 @@ def get_search_filter(
 @with_retries()
 async def delete_collection_items(
     collection_name: str,
-    image_infos: List[sly.ImageInfo],
+    items_info: List[Union[sly.ImageInfo, ObjectInfoLite, ImageInfoLite]],
 ) -> Dict[str, Any]:
     """Delete a collection items with the specified IDs.
 
     :param collection_name: The name of the collection to delete items from
     :type collection_name: str
-    :param image_infos: A list of ImageInfo objects to delete.
-    :type image_infos: List[ImageInfo]
+    :param items_info: A list of ImageInfo or ObjectInfoLite objects to delete.
+    :type items_info: List[Union[sly.ImageInfo, ObjectInfoLite, ImageInfoLite]]
     :return: The payloads of the deleted items.
     :rtype: Dict[str, Any]
     """
 
-    ids = [info.id for info in image_infos]
+    ids = [info.id for info in items_info]
 
     sly.logger.debug(f"[Collection: {collection_name}] Deleting items from collection %s...", ids)
     try:
@@ -248,7 +249,7 @@ async def collection_exists(collection_name: str) -> bool:
 async def upsert(
     collection_name: str,
     vectors: List[np.ndarray],
-    image_infos: List[ImageInfoLite],
+    items_info: List[ImageInfoLite, ObjectInfoLite],
 ) -> None:
     """Upsert vectors and payloads to the collection.
 
@@ -260,8 +261,8 @@ async def upsert(
     :type image_infos: List[ImageInfoLite]
     """
 
-    ids = [image_info.id for image_info in image_infos]
-    payloads = create_payloads(image_infos)
+    ids = [item_info.id for item_info in items_info]
+    payloads = create_payloads(items_info)
     sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
     await client.upsert(collection_name, Batch(vectors=vectors, ids=ids, payloads=payloads))
 
@@ -290,7 +291,7 @@ async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> Li
     """
     # Get specified ids from collection, compare updated_at and return ids that need to be updated.
 
-    ids = [image_info.id for image_info in image_infos]
+    ids = [image_info.image_id for image_info in image_infos]
 
     points = await client.retrieve(collection_name=collection_name, ids=ids, with_payload=True)
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
@@ -334,7 +335,7 @@ def _diff(
     points_dict = {point.id: point for point in points}
 
     for image_info in image_infos:
-        point = points_dict.get(image_info.id)
+        point = points_dict.get(image_info.image_id)
         if point is None or point.payload.get(TupleFields.UPDATED_AT) != image_info.updated_at:
             diff.append(image_info)
 
@@ -342,22 +343,22 @@ def _diff(
 
 
 @timeit
-def create_payloads(image_infos: List[ImageInfoLite]) -> List[Dict[str, Any]]:
+def create_payloads(items_info: List[Union[ImageInfoLite, ObjectInfoLite]]) -> List[Dict[str, Any]]:
     """
-    Prepare payloads for ImageInfoLite objects before upserting to Qdrant.
+    Prepare payloads for ImageInfoLite or ObjectInfoLite objects before upserting to Qdrant.
     Converts named tuples to dictionaries and removes fields:
        - ID
        - SCORE
 
-    :param image_infos: A list of ImageInfoLite objects.
-    :type image_infos: List[ImageInfoLite]    :
+    :param items_info: A list of ImageInfoLite or ObjectInfoLite objects.
+    :type items_info: List[Union[ImageInfoLite, ObjectInfoLite]]
     :return: A list of payloads.
     :rtype: List[Dict[str, Any]]
     """
     ignore_fields = [TupleFields.ID, TupleFields.SCORE]
     payloads = [
-        {k: v for k, v in image_info.to_json().items() if k not in ignore_fields}
-        for image_info in image_infos
+        {k: v for k, v in item_info.to_json().items() if k not in ignore_fields}
+        for item_info in items_info
     ]
     return payloads
 
@@ -408,7 +409,7 @@ async def search(
     result = {}
 
     result[SearchResultField.ITEMS] = [
-        ImageInfoLite(id=point.id, **point.payload) for point in response.points
+        ImageInfoLite(image_id=point.id, **point.payload) for point in response.points
     ]
 
     if return_vectors:
@@ -467,7 +468,7 @@ async def get_items(
 
     all_points = all_points[:limit]
 
-    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
+    image_infos = [ImageInfoLite(image_id=point.id, **point.payload) for point in points]
 
     sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
     if with_vectors:
@@ -481,8 +482,9 @@ async def get_items(
 @timeit
 async def get_items_by_id(
     collection_name: str,
-    image_ids: List[int],
+    item_ids: List[int],
     with_vectors: bool = False,
+    objects: bool = False,
 ) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
     """Get vectors from the collection based on the image IDs.
 
@@ -498,18 +500,20 @@ async def get_items_by_id(
 
     points = await client.retrieve(
         collection_name=collection_name,
-        ids=image_ids,
+        ids=item_ids,
         with_payload=True,
         with_vectors=with_vectors,
     )
-
-    image_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
+    if objects:
+        item_infos = [ObjectInfoLite(id=point.id, **point.payload) for point in points]
+    else:
+        item_infos = [ImageInfoLite(id=point.id, **point.payload) for point in points]
 
     if with_vectors:
         vectors = [point.vector for point in points]
     else:
         vectors = []
-    return image_infos, vectors
+    return item_infos, vectors
 
 
 @with_retries()

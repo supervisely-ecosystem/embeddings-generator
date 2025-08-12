@@ -81,6 +81,7 @@ class EventFields:
     SAVE = "save"
     RETURN_VECTORS = "return_vectors"
     THRESHOLD = "threshold"
+    OBJECTS = "objects"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"
@@ -437,11 +438,14 @@ def get_pcd_by_name(
 @timeit
 def set_image_embeddings_updated_at(
     api: sly.Api,
-    image_infos: List[Union[sly.ImageInfo, ImageInfoLite]],
+    items_info: List[Union[sly.ImageInfo, ImageInfoLite, ObjectInfoLite]],
     timestamps: Optional[List[str]] = None,
 ):
     """Sets the embeddings updated at timestamp for the images."""
-    ids = [image_info.id for image_info in image_infos]
+    if isinstance(items_info[0], (ImageInfoLite, sly.ImageInfo)):
+        ids = [image_info.id for image_info in items_info]
+    elif isinstance(items_info[0], ObjectInfoLite):
+        ids = [image_info.image_id for image_info in items_info]
     ids = list(set(ids))
     api.image.set_embeddings_updated_at(ids, timestamps)
 
@@ -699,38 +703,38 @@ def crop_and_resize_image_url(
 
         # Build processing string
         processing_parts = [f"q/ext:{ext}"]
-        
+
         # Add crop if bbox is provided [top, left, bottom, right]
         if bbox and len(bbox) == 4:
             top, left, bottom, right = bbox
             bbox_width = right - left
             bbox_height = bottom - top
-            
+
             # Calculate 10% padding from each dimension separately
             padding_x = int(bbox_width * 0.1)
             padding_y = int(bbox_height * 0.1)
-            
+
             # Apply padding to get final crop dimensions
             crop_left = max(0, left - padding_x)
             crop_top = max(0, top - padding_y)
             crop_right = right + padding_x
             crop_bottom = bottom + padding_y
-            
+
             crop_width = crop_right - crop_left
             crop_height = crop_bottom - crop_top
-            
+
             # Calculate relative center coordinates (0.0 to 1.0)
-            center_x = (crop_left + crop_width / 2)
-            center_y = (crop_top + crop_height / 2)
+            center_x = crop_left + crop_width / 2
+            center_y = crop_top + crop_height / 2
             processing_parts.append(f"crop:{crop_width}:{crop_height}:fp:{center_x}:{center_y}")
-        
+
         # Add resize
         processing_parts.append(f"resize:{method}:{width}:{height}:0")
         processing_parts.append(f"q:{quality}")
         processing_parts.append("plain")
-        
+
         processing_string = "/".join(processing_parts)
-        
+
         # Determine base address for imgproxy
         if imgproxy_address:
             # Remove trailing slash if present
@@ -744,7 +748,8 @@ def crop_and_resize_image_url(
     except Exception as e:
         sly.logger.debug(f"Failed to crop and resize image with url: {full_storage_url}: {repr(e)}")
         return full_storage_url
-    
+
+
 @timeit
 async def create_lite_object_infos(
     cas_size: int,
@@ -810,8 +815,9 @@ async def create_lite_object_infos(
 async def get_lite_object_infos(
     api: sly.Api,
     cas_size: int,
-    dataset_id: int,
+    project_id: int,
     image_ids: List[int] = None,
+    image_infos: List[sly.ImageInfo] = None,
     object_infos: List[Dict] = None,
     imgproxy_address: Optional[str] = None,
 ) -> List[ObjectInfoLite]:
@@ -837,16 +843,80 @@ async def get_lite_object_infos(
     :return: List of lite version of object infos.
     :rtype: List[ObjectInfoLite]
     """
-    if not object_infos or len(object_infos) == 0:
-        object_infos = await api.image.figure.download_async(
-            api, dataset_id, image_ids, skip_geometry=True
-        )
+    msg_prefix = f"[Project: {project_id}]"   
+    
+    # Store original image_ids to avoid overwriting
+    original_image_ids = image_ids
+    dataset_images_map = None
+    
+    if image_infos is not None and len(image_infos) > 0:
+        sly.logger.debug(f"{msg_prefix} Creating lite object infos from image_infos")
+        dataset_images_map = {}
+        for image_info in image_infos:
+            if image_info.dataset_id not in dataset_images_map:
+                dataset_images_map[image_info.dataset_id] = []
+            dataset_images_map[image_info.dataset_id].append(image_info.id) 
 
+    if not object_infos or len(object_infos) == 0:
+        sly.logger.debug(f"{msg_prefix} No object_infos provided, fetching from API")
+        object_infos = []
+        ds_image_info_list = []
+        dataset_infos = await get_datasets(project_id, recursive=True)
+        
+        for dataset_info in dataset_infos:
+            # Determine which image_ids to use for this dataset
+            current_image_ids = None
+            
+            if image_infos is not None and dataset_info.id in dataset_images_map:
+                # Use image IDs from image_infos for this specific dataset
+                current_image_ids = dataset_images_map[dataset_info.id]                
+            else:
+                # Fetch image infos from API, using original_image_ids if provided
+                sly.logger.debug(f"{msg_prefix} Fetching image_infos from API for dataset {dataset_info.id}")
+                sly.logger.debug(f"{msg_prefix} Using original_image_ids filter: {len(original_image_ids) if original_image_ids else 'None'}")
+                
+                ds_image_infos = await image_get_list_async(
+                    project_id=project_id,
+                    dataset_id=dataset_info.id,
+                    image_ids=original_image_ids,  # Use original parameter, not the overwritten variable
+                    wo_embeddings=True,
+                )
+                sly.logger.debug(f"{msg_prefix} Fetched {len(ds_image_infos)} image_infos from API for dataset {dataset_info.id}")
+                
+                current_image_ids = [image_info.id for image_info in ds_image_infos]
+                ds_image_info_list.extend(ds_image_infos)
+                    
+            ds_object_infos = await api.image.figure.download_async(
+                api, dataset_info.id, current_image_ids, skip_geometry=True
+            )
+            
+            if ds_object_infos:
+                sly.logger.debug(f"{msg_prefix} Downloaded {len(ds_object_infos)} object_infos for dataset {dataset_info.id}")
+                object_infos.extend(ds_object_infos)
+            else:
+                sly.logger.debug(f"{msg_prefix} No object_infos found for dataset {dataset_info.id}")
+    else:
+        sly.logger.debug(f"{msg_prefix} Using provided object_infos ({len(object_infos)} objects)")
+    
     if len(object_infos) == 0:
+        sly.logger.debug(f"{msg_prefix} No object_infos found, returning empty list")
         return []
+    
+    sly.logger.debug(f"{msg_prefix} Total object_infos collected: {len(object_infos)}")
+    
+    # Determine final image_infos to use
+    if image_infos is None:
+        sly.logger.debug(f"{msg_prefix} Using ds_image_info_list as image_infos ({len(ds_image_info_list)} images)")
+        image_infos = ds_image_info_list
+    else:
+        sly.logger.debug(f"{msg_prefix} Using provided image_infos ({len(image_infos)} images)")
+    
+    sly.logger.debug(f"{msg_prefix} Creating lite object infos...")
     object_infos = await create_lite_object_infos(
-        cas_size, object_infos, imgproxy_address=imgproxy_address
+        cas_size, object_infos, image_infos=image_infos, imgproxy_address=imgproxy_address
     )
+    
+    sly.logger.debug(f"{msg_prefix} Completed, returning {len(object_infos)} lite object infos")
     return object_infos
 
 
@@ -1736,11 +1806,4 @@ async def download_resized_images(image_urls: List[str]) -> List[bytes]:
         # Wait for all downloads to complete
         image_bytes_list = await asyncio.gather(*tasks)
 
-        return image_bytes_list
-        return image_bytes_list
-        return image_bytes_list
-        return image_bytes_list
-        return image_bytes_list
-        return image_bytes_list
-        return image_bytes_list
         return image_bytes_list

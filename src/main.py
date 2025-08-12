@@ -21,6 +21,7 @@ from src.project_collection_manager import AiSearchCollectionManager, DiverseCol
 from src.utils import (
     ClusteringMethods,
     ImageInfoLite,
+    ObjectInfoLite,
     ResponseFields,
     ResponseStatus,
     clean_image_embeddings_updated_at,
@@ -106,6 +107,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 "force": event.force,
                 "return_vectors": event.return_vectors,
                 "image_ids": event.image_ids,
+                "objects": event.objects,
             },
         )
 
@@ -202,11 +204,12 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
 
                 # ---------------- Step 4: Process Images. Check And Create Collection If Needed. ---------------- #
                 image_infos, vectors = await process_images(
-                    api,
-                    event.project_id,
+                    api=api,
+                    project_id=event.project_id,
                     to_create=images_to_create,
                     to_delete=images_to_delete,
                     return_vectors=event.return_vectors,
+                    objects=event.objects,
                 )
                 await set_project_embeddings_updated_at(api, event.project_id)
 
@@ -936,21 +939,25 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
             )
 
         # ----------------------- Step 3: Get Or Create Projections -------------------------- #
-        image_infos, projections = await get_or_create_projections(
+        items_info, projections = await get_or_create_projections(
             api, event.project_id, project_info
         )
-        if image_infos is None or projections is None:
+        if items_info is None or projections is None:
             message = f"{msg_prefix} Projections could not be created or retrieved."
             sly.logger.error(message)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=500)
         # ------------------------ Step 4: Filter Results By Image IDs ---------------------- #
         indexes = []
-        for i, info in enumerate(image_infos):
-            if event.image_ids is None or info.id in event.image_ids:
+        for i, info in enumerate(items_info):
+            if isinstance(info, ImageInfoLite):
+                image_id = info.id
+            elif isinstance(info, ObjectInfoLite):
+                image_id = info.image_id
+            if event.image_ids is None or image_id in event.image_ids:
                 indexes.append(i)
 
         sly.logger.info(f"{msg_prefix} Returning {len(indexes)} projections.")
-        return [[image_infos[i].to_json() for i in indexes], [projections[i] for i in indexes]]
+        return [[items_info[i].to_json() for i in indexes], [projections[i] for i in indexes]]
 
     except Exception as e:
         message = f"{msg_prefix} Error during projections creation: {str(e)}"

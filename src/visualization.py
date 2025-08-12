@@ -1,7 +1,7 @@
 import json
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import supervisely as sly
 from fastapi.responses import JSONResponse
@@ -14,15 +14,18 @@ from src.pointcloud import remove_pcd_file
 from src.pointcloud import upload as upload_pcd
 from src.utils import (
     ImageInfoLite,
+    ObjectInfoLite,
     ResponseFields,
     get_dataset_by_name,
     get_lite_image_infos,
+    get_lite_object_infos,
     get_or_create_dataset,
     get_or_create_project,
     get_pcd_by_name,
     get_project_info,
     get_project_info_by_name,
     get_team_file_info,
+    image_get_list_async,
     parse_timestamp,
     send_request,
     start_projections_service,
@@ -54,31 +57,41 @@ def random_color():
 
 @timeit
 async def create_projections(
-    api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None
-) -> Tuple[List[ImageInfoLite], List[List[float]]]:
+    api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None, objects: bool = False
+) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[List[float]]]:
 
     msg_prefix = f"[Project: {project_id}]"
 
     if image_ids is None:
-        image_infos = await get_lite_image_infos(
-            api,
-            cas_size=g.IMAGE_SIZE_FOR_CLIP,
-            project_id=project_id,
-            dataset_id=dataset_id,
-            imgproxy_address=g.imgproxy_address,
-        )
-    else:
-        image_infos = await get_lite_image_infos(
-            api,
-            cas_size=g.IMAGE_SIZE_FOR_CLIP,
-            project_id=project_id,
-            image_ids=image_ids,
-            imgproxy_address=g.imgproxy_address,
-        )
-    image_ids = [info.id for info in image_infos]
+        image_infos = await image_get_list_async(api, project_id, dataset_id)
 
-    image_infos_result, vectors = await qdrant.get_items_by_id(
-        project_id, image_ids, with_vectors=True
+    if objects:
+        if image_ids is not None:
+            image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids=image_ids)
+        ds_img_map = {}
+        if dataset_id is not None:
+            ds_img_map[dataset_id] = image_infos
+        else:
+            for img_info in image_infos:
+                img_info: sly.ImageInfo
+                if img_info.dataset_id not in ds_img_map:
+                    ds_img_map[img_info.dataset_id] = []
+                ds_img_map[img_info.dataset_id].append(img_info)
+
+        item_ids = []
+        for dataset_id, image_infos in ds_img_map.items():
+            figure_infos = await api.image.figure.download_async(
+                dataset_id,
+                [image_info.id for image_info in image_infos],
+                skip_geometry=True,
+            )
+            figure_ids = [figure_info.id for figure_info in figure_infos]
+            item_ids.extend(figure_ids)
+    else:
+        item_ids = [info.id for info in image_infos]
+
+    retrieved_item_info, vectors = await qdrant.get_items_by_id(
+        project_id, item_ids, with_vectors=True, objects=objects
     )
 
     try:
@@ -97,25 +110,26 @@ async def create_projections(
         retries=3,
         raise_error=True,
     )
-    import numpy as np
-    from sklearn.cluster import KMeans
+    # import numpy as np
+    # from sklearn.cluster import KMeans
 
-    n_clusters = min(8, len(projections))
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    cluster_labels = kmeans.fit_predict(np.array(projections))
+    # n_clusters = min(8, len(projections))
+    # kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    # cluster_labels = kmeans.fit_predict(np.array(projections))
 
-    return image_infos_result, projections, cluster_labels.tolist()
+    return retrieved_item_info, projections  # , cluster_labels.tolist()
 
 
 @timeit
 async def save_projections(
     api: sly.Api,
     project_id: int,
-    image_infos: List[ImageInfoLite],
+    items_info: List[Union[ImageInfoLite, ObjectInfoLite]],
     projections: List[List[float]],
     project_info: Optional[sly.ProjectInfo] = None,
-    cluster_labels: List[int] = None,
-):
+    object_ids: List[int] = None,
+    replace: bool = False,
+) -> sly.api.pointcloud_api.PointcloudInfo:
     """Saves projections to a PCD file and uploads it to the point cloud project.
 
     :param api: Supervisely API instance
@@ -124,33 +138,41 @@ async def save_projections(
     :param projections: List of 2D projection vectors corresponding to the images
     :param project_info: Optional project information object, if not provided it will be fetched
     :param cluster_labels: object_ids
+    :param replace: If True, replaces the existing PCD file with the new one
+    :return: Point cloud information object containing details about the uploaded PCD file
     """
-    from supervisely.project.project_meta import ProjectMeta
 
     if project_info is None:
         project_info = await get_project_info(api, project_id)
 
-    project_meta = api.project.get_meta(project_info.id)
-    meta = ProjectMeta.from_json(project_meta)
-    class_colors = {}
-    for class_info in meta.obj_classes:
-        if class_info.color is not None:
-            class_colors[class_info.name] = class_info.color
-    colors = [
-        class_colors.get(str(cluster_label), random_color()) for cluster_label in cluster_labels
-    ]
     pcd_dataset_info = await get_or_create_projections_dataset(
         api, project_info.id, image_project_info=project_info
     )
 
+    pcd_info = await get_pcd_info(api, project_id, project_info)
+
+    if replace and pcd_info is not None:
+        await remove_pcd_file(api, pcd_info.id)
+    elif pcd_info is not None:
+        sly.logger.debug(
+            f"[Project: {project_id}] Projections PCD already exists, skipping upload."
+        )
+        return pcd_info
+
+    if isinstance(items_info[0], ObjectInfoLite):
+        image_ids = [info.image_id for info in items_info]
+        object_ids = [info.image_id for info in items_info]
+    elif isinstance(items_info[0], ImageInfoLite):
+        image_ids = [info.image_id for info in items_info]
+        object_ids = None
+
     pcd_info = await upload_pcd(
-        api,
-        projections,
-        [info.id for info in image_infos],
-        get_projections_pcd_name(),
-        pcd_dataset_info.id,
-        cluster_labels,
-        colors=colors,
+        api=api,
+        pointcloud=projections,
+        image_ids=image_ids,
+        pcd_name=get_projections_pcd_name(),
+        dataset_id=pcd_dataset_info.id,
+        cluster_ids=object_ids,
     )
     return pcd_info
 
@@ -205,16 +227,26 @@ async def get_projections(
 
     pcd = await download_pcd(api, pcd_info.id)
     vectors = pcd.points[:, :2]
-    cluster_labels = pcd.cluster_ids
+    # cluster_labels = pcd.cluster_ids
     image_ids = pcd.image_ids
-    image_infos = await get_lite_image_infos(
-        api,
-        cas_size=g.IMAGE_SIZE_FOR_CLIP,
-        project_id=project_id,
-        image_ids=image_ids,
-        imgproxy_address=g.imgproxy_address,
-    )
-    return image_infos, vectors.tolist(), cluster_labels.tolist()
+    object_ids = pcd.object_ids
+    if len(object_ids) > 0:
+        items_info = await get_lite_object_infos(
+            api,
+            cas_size=g.IMAGE_SIZE_FOR_CLIP,
+            project_id=project_id,
+            image_ids=image_ids,
+            imgproxy_address=g.imgproxy_address,
+        )
+    else:
+        items_info = await get_lite_image_infos(
+            api,
+            cas_size=g.IMAGE_SIZE_FOR_CLIP,
+            project_id=project_id,
+            image_ids=image_ids,
+            imgproxy_address=g.imgproxy_address,
+        )
+    return items_info, vectors.tolist()  # , cluster_labels.tolist()
 
 
 async def get_or_create_projections_dataset(
@@ -280,29 +312,32 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
             # Remove outdated PCD file before creating new one
             await remove_pcd_file(api, pcd_info.id)
             pcd_info = None
+        else:
+            replace = True  #! remove after testing
 
     if pcd_info is None:
         # create new projections
-        image_infos, projections, cluster_labels = await create_projections(
+        items_info, projections = await create_projections(  # , cluster_labels
             api,
             project_id,
             # image_ids=image_ids, #TODO add before release projections endpoints
         )
-        if image_infos is None or projections is None:
-            return image_infos, projections
+        if items_info is None or projections is None:
+            return items_info, projections
 
         # save projections
         await save_projections(
             api,
             project_id=project_id,
-            image_infos=image_infos,
+            items_info=items_info,
             projections=projections,
             project_info=project_info,
-            cluster_labels=cluster_labels,
+            # cluster_labels=cluster_labels,
+            replace=replace,
         )
     else:
-        image_infos, projections, cluster_labels = await get_projections(
+        items_info, projections = await get_projections(  # , cluster_labels
             api, project_id, project_info=project_info, pcd_info=pcd_info
         )
 
-    return image_infos, projections, cluster_labels
+    return items_info, projections  # , cluster_labels

@@ -13,11 +13,13 @@ class Event:
             force: Optional[bool],
             image_ids: Optional[List[int]],
             return_vectors: Optional[bool] = False,
+            objects: Optional[bool] = True,  #! Set to False before release
         ):
             self.project_id = project_id
             self.force = force
             self.image_ids = image_ids
             self.return_vectors = return_vectors
+            self.objects = objects
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -26,6 +28,7 @@ class Event:
                 data.get(EventFields.FORCE),
                 data.get(EventFields.IMAGE_IDS),
                 data.get(EventFields.RETURN_VECTORS),
+                data.get(EventFields.OBJECTS),
             )
 
     class Search:

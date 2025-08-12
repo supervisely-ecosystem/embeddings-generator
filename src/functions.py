@@ -13,6 +13,7 @@ from src.utils import (
     create_lite_image_infos,
     download_resized_images,
     fix_vectors,
+    get_lite_object_infos,
     get_project_info,
     image_get_list_async,
     parse_timestamp,
@@ -32,6 +33,7 @@ async def process_images(
     to_delete: List[sly.ImageInfo],
     return_vectors: bool = False,
     check_collection_exists: bool = True,
+    objects: bool = False,
 ) -> Tuple[List[sly.ImageInfo], List[List[float]]]:
     """Process images from the specified project. Download images, save them to HDF5,
     get vectors from the images and upsert them to Qdrant.
@@ -61,11 +63,22 @@ async def process_images(
         return to_create, vectors
 
     try:
-        to_create = await create_lite_image_infos(
-            cas_size=g.IMAGE_SIZE_FOR_CLIP,
-            image_infos=to_create,
-            imgproxy_address=g.imgproxy_address,
-        )
+        if objects:
+            # If objects are requested, download them as CollectionItems
+            to_create = await get_lite_object_infos(
+                api,
+                cas_size=g.IMAGE_SIZE_FOR_CLIP,
+                project_id=project_id,
+                image_infos=to_create,
+                imgproxy_address=g.imgproxy_address,
+            )
+        else:
+            # If only images are requested, download them as ImageInfos
+            to_create = await create_lite_image_infos(
+                cas_size=g.IMAGE_SIZE_FOR_CLIP,
+                image_infos=to_create,
+                imgproxy_address=g.imgproxy_address,
+            )
 
         # if await qdrant.collection_exists(project_id):
         # Get diff of image infos, check if they are already in the Qdrant collection
@@ -82,10 +95,10 @@ async def process_images(
 
         if len(to_create) > 0:
             logger.debug(f"{msg_prefix} Images to be vectorized: {total_progress}.")
-            for image_batch in sly.batched(to_create):
+            for items_batch in sly.batched(to_create):
                 # Download images as bytes and create Document objects
-                image_urls = [image_info.cas_url for image_info in image_batch]
-                image_bytes_list = await download_resized_images(image_urls)
+                item_urls = [item_info.cas_url for item_info in items_batch]
+                image_bytes_list = await download_resized_images(item_urls)
                 # Create Document objects with blob data
                 queries = [Document(blob=image_bytes) for image_bytes in image_bytes_list]
 
@@ -95,8 +108,8 @@ async def process_images(
                 logger.debug(f"{msg_prefix} Got {len(vectors_batch)} vectors for images.")
 
                 # Upsert vectors to Qdrant.
-                await qdrant.upsert(project_id, vectors_batch, image_batch)
-                current_progress += len(image_batch)
+                await qdrant.upsert(project_id, vectors_batch, items_batch)
+                current_progress += len(items_batch)
 
                 # Update progress
                 await update_processing_progress(project_id, current_progress, "processing")
@@ -104,7 +117,7 @@ async def process_images(
                 logger.debug(
                     f"{msg_prefix} Upserted {len(vectors_batch)} vectors to Qdrant. [{current_progress}/{total_progress}]",
                 )
-                await set_image_embeddings_updated_at(api, image_batch)
+                await set_image_embeddings_updated_at(api, items_batch)
 
                 if return_vectors:
                     vectors.extend(vectors_batch)
@@ -115,13 +128,13 @@ async def process_images(
 
         if len(to_delete) > 0:
             logger.debug(f"{msg_prefix} Vectors for images to be deleted: {len(to_delete)}.")
-            for image_batch in sly.batched(to_delete):
+            for items_batch in sly.batched(to_delete):
                 # Delete images from the Qdrant.
                 await qdrant.delete_collection_items(
-                    collection_name=project_id, image_infos=image_batch
+                    collection_name=project_id, items_info=items_batch
                 )
-                await set_image_embeddings_updated_at(api, image_batch, [None] * len(image_batch))
-                logger.debug(f"{msg_prefix} Deleted {len(image_batch)} images from Qdrant.")
+                await set_image_embeddings_updated_at(api, items_batch, [None] * len(items_batch))
+                logger.debug(f"{msg_prefix} Deleted {len(items_batch)} images from Qdrant.")
 
         logger.info(
             f"{msg_prefix} Embeddings Created: {len(to_create)}, Deleted: {len(to_delete)}."
@@ -145,6 +158,7 @@ async def update_embeddings(
     project_id: int,
     force: bool = False,
     project_info: Optional[sly.ProjectInfo] = None,
+    objects: bool = False,
 ):
     msg_prefix = f"[Project: {project_id}] "
 
@@ -181,7 +195,13 @@ async def update_embeddings(
     else:
         logger.debug("Embeddings for project %d are up-to-date.", project_info.id)
         return
-    image_infos = await process_images(api, project_id, images_to_create, images_to_delete)
-    if len(image_infos) > 0:
-        await set_image_embeddings_updated_at(api, image_infos)
+    items_info = await process_images(
+        api=api,
+        project_id=project_id,
+        to_create=images_to_create,
+        to_delete=images_to_delete,
+        objects=objects,
+    )
+    if len(items_info) > 0:
+        await set_image_embeddings_updated_at(api, items_info)
         await set_project_embeddings_updated_at(api, project_id)
