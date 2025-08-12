@@ -776,7 +776,14 @@ async def create_lite_object_infos(
 
     image_urls = {image_info.id: image_info.full_storage_url for image_info in image_infos}
     objects_list = []
+    progress = sly.tqdm.tqdm(
+        total=len(object_infos),
+        desc=f"[Project: {obj_info.project_id}] Creating lite object infos",
+        unit="object",
+        leave=False,
+    )
     for obj_info in object_infos:
+        obj_info: sly.FigureInfo
         image_url = image_urls.get(obj_info.entity_id)
         if image_url is None:
             sly.logger.warning(
@@ -784,27 +791,26 @@ async def create_lite_object_infos(
             )
             continue
 
-        for obj_info in object_infos:
-            obj_info: sly.FigureInfo
+        cas_url = crop_and_resize_image_url(
+            full_storage_url=image_url,
+            imgproxy_address=imgproxy_address,
+            method="fit",
+            width=cas_size,
+            height=cas_size,
+        )
 
-            cas_url = crop_and_resize_image_url(
-                full_storage_url=image_url,
-                imgproxy_address=imgproxy_address,
-                method="fit",
-                width=cas_size,
-                height=cas_size,
+        objects_list.append(
+            ObjectInfoLite(
+                id=obj_info.id,
+                image_id=obj_info.entity_id,
+                dataset_id=obj_info.dataset_id,
+                class_id=obj_info.class_id,
+                bbox=obj_info.bbox,
+                image_url=image_url,
+                cas_url=cas_url,
             )
-            objects_list.append(
-                ObjectInfoLite(
-                    id=obj_info.id,
-                    image_id=obj_info.entity_id,
-                    dataset_id=obj_info.dataset_id,
-                    class_id=obj_info.class_id,
-                    bbox=obj_info.bbox,
-                    image_url=image_url,
-                    cas_url=cas_url,
-                )
-            )
+        )
+        progress.update(1)
     return objects_list
 
 
