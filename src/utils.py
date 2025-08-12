@@ -786,6 +786,7 @@ async def create_lite_object_infos(
 
         for obj_info in object_infos:
             obj_info: sly.FigureInfo
+
             cas_url = crop_and_resize_image_url(
                 full_storage_url=image_url,
                 imgproxy_address=imgproxy_address,
@@ -799,7 +800,7 @@ async def create_lite_object_infos(
                     image_id=obj_info.entity_id,
                     dataset_id=obj_info.dataset_id,
                     class_id=obj_info.class_id,
-                    bbox=obj_info.meta.get("bbox", []),
+                    bbox=obj_info.bbox,
                     image_url=image_url,
                     cas_url=cas_url,
                 )
@@ -1820,7 +1821,4 @@ async def download_resized_images(image_urls: List[str]) -> List[bytes]:
         # Wait for all downloads to complete
         image_bytes_list = await asyncio.gather(*tasks)
 
-        return image_bytes_list
-        return image_bytes_list
-        return image_bytes_list
         return image_bytes_list
