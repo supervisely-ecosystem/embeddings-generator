@@ -14,8 +14,7 @@ import aiohttp
 import supervisely as sly
 from supervisely._utils import batched
 from supervisely.api.app_api import SessionInfo
-from supervisely.api.entities_collection_api import (CollectionItem,
-                                                     CollectionType)
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
@@ -753,7 +752,7 @@ def crop_and_resize_image_url(
 @timeit
 async def create_lite_object_infos(
     cas_size: int,
-    object_infos: Dict[int, List[sly.FigureInfo]],
+    object_infos: List[sly.FigureInfo],
     image_infos: List[sly.ImageInfo],
     imgproxy_address: Optional[str] = None,
 ) -> List[ObjectInfoLite]:
@@ -777,14 +776,11 @@ async def create_lite_object_infos(
 
     image_urls = {image_info.id: image_info.full_storage_url for image_info in image_infos}
     objects_list = []
-    for img_id, object_infos in object_infos.items():
-        if not object_infos:
-            continue
-        project_id = object_infos[0].project_id
-        image_url = image_urls.get(img_id)
+    for obj_info in object_infos:
+        image_url = image_urls.get(obj_info.entity_id)
         if image_url is None:
             sly.logger.warning(
-                f"[Project: {project_id}] Image with ID {img_id} not found in image infos while creating lite object infos"
+                f"[Project: {obj_info.project_id}] Image with ID {obj_info.entity_id} not found in image infos while creating lite object infos"
             )
             continue
 
@@ -843,79 +839,97 @@ async def get_lite_object_infos(
     :return: List of lite version of object infos.
     :rtype: List[ObjectInfoLite]
     """
-    msg_prefix = f"[Project: {project_id}]"   
-    
+    msg_prefix = f"[Project: {project_id}]"
+
     # Store original image_ids to avoid overwriting
     original_image_ids = image_ids
     dataset_images_map = None
-    
+
     if image_infos is not None and len(image_infos) > 0:
         sly.logger.debug(f"{msg_prefix} Creating lite object infos from image_infos")
         dataset_images_map = {}
         for image_info in image_infos:
             if image_info.dataset_id not in dataset_images_map:
                 dataset_images_map[image_info.dataset_id] = []
-            dataset_images_map[image_info.dataset_id].append(image_info.id) 
+            dataset_images_map[image_info.dataset_id].append(image_info.id)
 
     if not object_infos or len(object_infos) == 0:
         sly.logger.debug(f"{msg_prefix} No object_infos provided, fetching from API")
         object_infos = []
         ds_image_info_list = []
-        dataset_infos = await get_datasets(project_id, recursive=True)
-        
+        dataset_infos = await get_datasets(api, project_id, recursive=True)
+
         for dataset_info in dataset_infos:
             # Determine which image_ids to use for this dataset
             current_image_ids = None
-            
+
             if image_infos is not None and dataset_info.id in dataset_images_map:
                 # Use image IDs from image_infos for this specific dataset
-                current_image_ids = dataset_images_map[dataset_info.id]                
+                current_image_ids = dataset_images_map[dataset_info.id]
             else:
                 # Fetch image infos from API, using original_image_ids if provided
-                sly.logger.debug(f"{msg_prefix} Fetching image_infos from API for dataset {dataset_info.id}")
-                sly.logger.debug(f"{msg_prefix} Using original_image_ids filter: {len(original_image_ids) if original_image_ids else 'None'}")
-                
+                sly.logger.debug(
+                    f"{msg_prefix} Fetching image_infos from API for dataset {dataset_info.id}"
+                )
+                sly.logger.debug(
+                    f"{msg_prefix} Using original_image_ids filter: {len(original_image_ids) if original_image_ids else 'None'}"
+                )
+
                 ds_image_infos = await image_get_list_async(
+                    api=api,
                     project_id=project_id,
                     dataset_id=dataset_info.id,
                     image_ids=original_image_ids,  # Use original parameter, not the overwritten variable
                     wo_embeddings=True,
                 )
-                sly.logger.debug(f"{msg_prefix} Fetched {len(ds_image_infos)} image_infos from API for dataset {dataset_info.id}")
-                
+                sly.logger.debug(
+                    f"{msg_prefix} Fetched {len(ds_image_infos)} image_infos from API for dataset {dataset_info.id}"
+                )
+
                 current_image_ids = [image_info.id for image_info in ds_image_infos]
                 ds_image_info_list.extend(ds_image_infos)
-                    
-            ds_object_infos = await api.image.figure.download_async(
-                api, dataset_info.id, current_image_ids, skip_geometry=True
-            )
-            
+            ds_object_infos = []
+            for batch in sly.batched(current_image_ids, batch_size=300):
+                figures = await api.image.figure.download_async(
+                    dataset_id=dataset_info.id,
+                    image_ids=batch,
+                    skip_geometry=True,
+                )
+                for _, figures in figures.items():
+                    ds_object_infos.extend(figures)
+
             if ds_object_infos:
-                sly.logger.debug(f"{msg_prefix} Downloaded {len(ds_object_infos)} object_infos for dataset {dataset_info.id}")
+                sly.logger.debug(
+                    f"{msg_prefix} Downloaded {len(ds_object_infos)} object_infos for dataset {dataset_info.id}"
+                )
                 object_infos.extend(ds_object_infos)
             else:
-                sly.logger.debug(f"{msg_prefix} No object_infos found for dataset {dataset_info.id}")
+                sly.logger.debug(
+                    f"{msg_prefix} No object_infos found for dataset {dataset_info.id}"
+                )
     else:
         sly.logger.debug(f"{msg_prefix} Using provided object_infos ({len(object_infos)} objects)")
-    
+
     if len(object_infos) == 0:
         sly.logger.debug(f"{msg_prefix} No object_infos found, returning empty list")
         return []
-    
+
     sly.logger.debug(f"{msg_prefix} Total object_infos collected: {len(object_infos)}")
-    
+
     # Determine final image_infos to use
     if image_infos is None:
-        sly.logger.debug(f"{msg_prefix} Using ds_image_info_list as image_infos ({len(ds_image_info_list)} images)")
+        sly.logger.debug(
+            f"{msg_prefix} Using ds_image_info_list as image_infos ({len(ds_image_info_list)} images)"
+        )
         image_infos = ds_image_info_list
     else:
         sly.logger.debug(f"{msg_prefix} Using provided image_infos ({len(image_infos)} images)")
-    
+
     sly.logger.debug(f"{msg_prefix} Creating lite object infos...")
     object_infos = await create_lite_object_infos(
         cas_size, object_infos, image_infos=image_infos, imgproxy_address=imgproxy_address
     )
-    
+
     sly.logger.debug(f"{msg_prefix} Completed, returning {len(object_infos)} lite object infos")
     return object_infos
 
@@ -1806,4 +1820,7 @@ async def download_resized_images(image_urls: List[str]) -> List[bytes]:
         # Wait for all downloads to complete
         image_bytes_list = await asyncio.gather(*tasks)
 
+        return image_bytes_list
+        return image_bytes_list
+        return image_bytes_list
         return image_bytes_list

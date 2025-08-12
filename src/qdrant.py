@@ -249,7 +249,7 @@ async def collection_exists(collection_name: str) -> bool:
 async def upsert(
     collection_name: str,
     vectors: List[np.ndarray],
-    items_info: List[ImageInfoLite, ObjectInfoLite],
+    items_info: List[Union[ImageInfoLite, ObjectInfoLite]],
 ) -> None:
     """Upsert vectors and payloads to the collection.
 

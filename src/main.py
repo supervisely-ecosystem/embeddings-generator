@@ -209,7 +209,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     to_create=images_to_create,
                     to_delete=images_to_delete,
                     return_vectors=event.return_vectors,
-                    objects=event.objects,
+                    objects=True,  #! Set to event.objects before release
                 )
                 await set_project_embeddings_updated_at(api, event.project_id)
 

@@ -57,7 +57,11 @@ def random_color():
 
 @timeit
 async def create_projections(
-    api: sly.Api, project_id: int, dataset_id: int = None, image_ids: List[int] = None, objects: bool = False
+    api: sly.Api,
+    project_id: int,
+    dataset_id: int = None,
+    image_ids: List[int] = None,
+    objects: bool = False,
 ) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[List[float]]]:
 
     msg_prefix = f"[Project: {project_id}]"
@@ -67,7 +71,9 @@ async def create_projections(
 
     if objects:
         if image_ids is not None:
-            image_infos = await image_get_list_async(api, project_id, dataset_id, image_ids=image_ids)
+            image_infos = await image_get_list_async(
+                api, project_id, dataset_id, image_ids=image_ids
+            )
         ds_img_map = {}
         if dataset_id is not None:
             ds_img_map[dataset_id] = image_infos
@@ -81,8 +87,8 @@ async def create_projections(
         item_ids = []
         for dataset_id, image_infos in ds_img_map.items():
             figure_infos = await api.image.figure.download_async(
-                dataset_id,
-                [image_info.id for image_info in image_infos],
+                dataset_id=dataset_id,
+                image_ids=[image_info.id for image_info in image_infos],
                 skip_geometry=True,
             )
             figure_ids = [figure_info.id for figure_info in figure_infos]
