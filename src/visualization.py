@@ -170,7 +170,7 @@ async def save_projections(
 
     if isinstance(items_info[0], ObjectInfoLite):
         image_ids = [info.image_id for info in items_info]
-        object_ids = [info.image_id for info in items_info]
+        object_ids = [info.id for info in items_info]
     elif isinstance(items_info[0], ImageInfoLite):
         image_ids = [info.image_id for info in items_info]
         object_ids = None
