@@ -58,6 +58,7 @@ class QdrantFields:
     # Payload Fields
     DATASET_ID = "dataset_id"
     IMAGE_ID = "image_id"
+    CLASS_ID = "class_id"
     ID = "id"
 
 
@@ -119,6 +120,7 @@ class ResponseFields:
     STATUS = "status"
     VECTORS = "vectors"
     IMAGE_IDS = "image_ids"
+    OBJECT_IDS = "object_ids"
     BACKGROUND_TASK_ID = "background_task_id"
     RESULT = "result"
     IS_RUNNING = "is_running"
@@ -143,6 +145,14 @@ class CustomDataFields:
     """Fields of the custom data."""
 
     EMBEDDINGS_UPDATE_STARTED_AT = "embeddings_update_started_at"
+    EMBEDDINGS_TYPE = "embeddings_type"
+
+
+class EmbeddingsType:
+    """Type of embeddings to use."""
+
+    IMAGES = "images"
+    OBJECTS = "objects"
 
 
 @dataclass
@@ -413,7 +423,7 @@ def get_or_create_project(
 @to_thread
 @timeit
 def get_dataset_by_name(api: sly.Api, project_id: int, dataset_name: str) -> sly.DatasetInfo:
-    return api.dataset.get_info_by_name(project_id, name=dataset_name)
+    return api.dataset.get_info_by_name(project_id=project_id, name=dataset_name)
 
 
 @to_thread
@@ -900,14 +910,14 @@ async def get_lite_object_infos(
                 current_image_ids = [image_info.id for image_info in ds_image_infos]
                 ds_image_info_list.extend(ds_image_infos)
             ds_object_infos = []
-            for batch in sly.batched(current_image_ids, batch_size=300):
-                figures = await api.image.figure.download_async(
-                    dataset_id=dataset_info.id,
-                    image_ids=batch,
-                    skip_geometry=True,
-                )
-                for _, figures in figures.items():
-                    ds_object_infos.extend(figures)
+            figures = await api.image.figure.download_async(
+                dataset_id=dataset_info.id,
+                image_ids=current_image_ids,
+                log_progress=False,
+                skip_geometry=True,
+            )
+            for _, figures in figures.items():
+                ds_object_infos.extend(figures)
 
             if ds_object_infos:
                 sly.logger.debug(
@@ -1832,3 +1842,27 @@ async def download_resized_images(image_urls: List[str]) -> List[bytes]:
         image_bytes_list = await asyncio.gather(*tasks)
 
         return image_bytes_list
+
+
+@to_thread
+def get_embeddings_type(api: sly.Api, project_id: int) -> str:
+    """Get the type of embeddings to use based on environment variable."""
+    custom_data = api.project.get_custom_data(project_id)
+    embeddings_type = custom_data.get(CustomDataFields.EMBEDDINGS_TYPE, EmbeddingsType.IMAGES)
+    return embeddings_type
+
+
+@to_thread
+def set_embeddings_type(api: sly.Api, project_id: int, objects: bool = False):
+    """Set the type of embeddings to use for the project.
+
+    If objects is True, set embeddings type to OBJECTS, otherwise set to IMAGES.
+    """
+    if objects:
+        embeddings_type = EmbeddingsType.OBJECTS
+    else:
+        embeddings_type = EmbeddingsType.IMAGES
+    custom_data = api.project.get_custom_data(project_id)
+    custom_data[CustomDataFields.EMBEDDINGS_TYPE] = embeddings_type
+    api.project.update_custom_data(project_id, custom_data, silent=True)
+    sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")

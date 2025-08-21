@@ -20,6 +20,7 @@ from src.pointcloud import upload as upload_pcd
 from src.project_collection_manager import AiSearchCollectionManager, DiverseCollectionManager
 from src.utils import (
     ClusteringMethods,
+    EmbeddingsType,
     ImageInfoLite,
     ObjectInfoLite,
     ResponseFields,
@@ -33,11 +34,13 @@ from src.utils import (
     download_resized_images,
     embeddings_up_to_date,
     get_all_processing_progress,
+    get_embeddings_type,
     get_processing_progress,
     get_project_info,
     image_get_list_async,
     send_request,
     set_embeddings_in_progress,
+    set_embeddings_type,
     set_project_embeddings_updated_at,
     set_update_flag,
     start_projections_service,
@@ -203,27 +206,32 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     await qdrant.delete_collection(event.project_id)
 
                 # ---------------- Step 4: Process Images. Check And Create Collection If Needed. ---------------- #
-                image_infos, vectors = await process_images(
+                items_info, vectors = await process_images(
                     api=api,
                     project_id=event.project_id,
                     to_create=images_to_create,
                     to_delete=images_to_delete,
                     return_vectors=event.return_vectors,
-                    objects=True,  #! Set to event.objects before release
+                    objects=event.objects,
                 )
                 await set_project_embeddings_updated_at(api, event.project_id)
+                await set_embeddings_type(api, event.project_id, event.objects)
 
                 # Clean up resources before returning
                 await cleanup_task_resources()
 
                 if event.return_vectors:
+                    item_name = "objects" if event.objects else "images"
+                    response_field = (
+                        ResponseFields.OBJECT_IDS if event.objects else ResponseFields.IMAGE_IDS
+                    )
                     sly.logger.info(
                         f"{msg_prefix} Embeddings creation has been completed. "
-                        f"{len(image_infos)} images vectorized. {len(images_to_delete)} images deleted. {len(vectors)} vectors returned.",
+                        f"{len(items_info)} {item_name} vectorized. {len(images_to_delete)} {item_name} deleted. {len(vectors)} vectors returned.",
                     )
                     return JSONResponse(
                         {
-                            ResponseFields.IMAGE_IDS: [info.id for info in image_infos],
+                            response_field: [info.id for info in items_info],
                             ResponseFields.VECTORS: vectors,
                         }
                     )
@@ -911,6 +919,8 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
                 "image_ids": event.image_ids,
             },
         )
+        emb_type = await get_embeddings_type(api, event.project_id)
+        objects = False if emb_type == EmbeddingsType.IMAGES else True
 
         # --------------------------- Step 0: Validate Project For AI Features --------------------------- #
         project_info: sly.ProjectInfo = await get_project_info(api, event.project_id)
@@ -936,11 +946,15 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
                 event.project_id,
                 force=False,
                 project_info=project_info,
+                objects=objects,
             )
 
         # ----------------------- Step 3: Get Or Create Projections -------------------------- #
         items_info, projections = await get_or_create_projections(
-            api, event.project_id, project_info
+            api=api,
+            project_id=event.project_id,
+            project_info=project_info,
+            objects=objects,
         )
         if items_info is None or projections is None:
             message = f"{msg_prefix} Projections could not be created or retrieved."

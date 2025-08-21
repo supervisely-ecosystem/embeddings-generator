@@ -128,6 +128,7 @@ class ImageReferences:
 def get_search_filter(
     dataset_id: Optional[int] = None,
     image_ids: Optional[List[int]] = None,
+    object_image_ids: Optional[List[int]] = None,
 ):
     """Get search filter for Qdrant collection.
 
@@ -135,6 +136,8 @@ def get_search_filter(
     :type dataset_id: Optional[int], optional
     :param image_ids: List of image IDs to filter by.
     :type image_ids: Optional[List[int]], optional
+    :param object_image_ids: List of object image IDs to filter by.
+    :type object_image_ids: Optional[List[int]], optional
     :return: Filter for Qdrant collection.
     :rtype: dict
     """
@@ -155,30 +158,48 @@ def get_search_filter(
                 ),
             ],
         )
-
+    elif object_image_ids:
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key=QdrantFields.IMAGE_ID,
+                    match=models.MatchAny(any=object_image_ids),
+                ),
+            ],
+        )
     return filter
 
 
 @with_retries()
 async def delete_collection_items(
     collection_name: str,
-    items_info: List[Union[sly.ImageInfo, ObjectInfoLite, ImageInfoLite]],
+    items_info: List[Union[sly.ImageInfo, ImageInfoLite]],
+    objects: bool = False,
 ) -> Dict[str, Any]:
     """Delete a collection items with the specified IDs.
 
     :param collection_name: The name of the collection to delete items from
     :type collection_name: str
-    :param items_info: A list of ImageInfo or ObjectInfoLite objects to delete.
-    :type items_info: List[Union[sly.ImageInfo, ObjectInfoLite, ImageInfoLite]]
+    :param items_info: A list of ImageInfo or ImageInfoLite objects to delete.
+    :type items_info: List[Union[sly.ImageInfo, ImageInfoLite]]
+    :param objects: If True, delete object embeddings instead of image embeddings.
+    :type objects: bool, optional
     :return: The payloads of the deleted items.
     :rtype: Dict[str, Any]
     """
-
+    objects_filter = None
     ids = [info.id for info in items_info]
+    if objects:
+        objects_filter = get_search_filter(object_image_ids=ids)
 
     sly.logger.debug(f"[Collection: {collection_name}] Deleting items from collection %s...", ids)
     try:
-        await client.delete(collection_name, ids, wait=False)
+        await client.delete(
+            collection_name=collection_name,
+            points_selector=objects_filter
+            or ids,  # Use filter if objects, otherwise use ids directly
+            wait=False,
+        )
     except UnexpectedResponse:
         sly.logger.debug(
             f"[Collection: {collection_name}] Something went wrong, while deleting {ids}."
@@ -188,7 +209,10 @@ async def delete_collection_items(
 @with_retries()
 @timeit
 async def get_or_create_collection(
-    collection_name: str, size: int = 512, distance: Distance = Distance.COSINE
+    collection_name: str,
+    size: int = 512,
+    distance: Distance = Distance.COSINE,
+    objects: bool = False,
 ) -> CollectionInfo:
     """Get or create a collection with the specified name.
 
@@ -198,19 +222,21 @@ async def get_or_create_collection(
     :type size: int, optional
     :param distance: The distance metric to use for the collection, defaults to Distance.COSINE.
     :type distance: Distance, optional
+    :param objects: If True, create a collection for object embeddings instead of image embeddings.
+    :type objects: bool, optional
     :return: The CollectionInfo object.
     :rtype: CollectionInfo
     """
-
+    msg_prefix = f"[Project: {collection_name}]"
     try:
         collection = await client.get_collection(collection_name)
-        sly.logger.debug("Collection %s already exists.", collection_name)
+        sly.logger.debug(f"{msg_prefix} Qdrant collection already exists.")
     except UnexpectedResponse:
         await client.create_collection(
             collection_name,
             vectors_config=VectorParams(size=size, distance=distance),
         )
-        sly.logger.debug("Collection %s created.", collection_name)
+        sly.logger.debug(f"{msg_prefix} Qdrant collection created.")
 
         # Create necessary indexes for efficient filtering
 
@@ -220,9 +246,25 @@ async def get_or_create_collection(
             field_schema="keyword",
         )
 
-        sly.logger.debug(
-            f"{QdrantFields.DATASET_ID} field indexed for collection {collection_name}"
+        msg_indexed_fields = (
+            f"{msg_prefix} Fields indexed for collection: {QdrantFields.DATASET_ID}"
         )
+
+        if objects:
+            await client.create_payload_index(
+                collection_name=collection_name,
+                field_name=f"{QdrantFields.IMAGE_ID}",
+                field_schema="keyword",
+            )
+
+            await client.create_payload_index(
+                collection_name=collection_name,
+                field_name=f"{QdrantFields.CLASS_ID}",
+                field_schema="keyword",
+            )
+            msg_indexed_fields += f", {QdrantFields.IMAGE_ID}, {QdrantFields.CLASS_ID}"
+
+        sly.logger.debug(msg_indexed_fields)
 
         collection = await client.get_collection(collection_name)
     return collection
@@ -263,83 +305,18 @@ async def upsert(
 
     ids = [item_info.id for item_info in items_info]
     payloads = create_payloads(items_info)
-    sly.logger.debug("Upserting %d vectors to collection %s.", len(vectors), collection_name)
+    msg_prefix = f"[Project: {collection_name}]"
+    sly.logger.debug(f"{msg_prefix} Upserting {len(vectors)} vectors to Qdrant collection.")
     await client.upsert(collection_name, Batch(vectors=vectors, ids=ids, payloads=payloads))
 
     if sly.is_development():
         # By default qdrant should overwrite vectors with the same ids
         # so this line is only needed to check if vectors were upserted correctly.
         # Do not use this in production since it will slow down the process.
-        collecton_info = await client.get_collection(collection_name)
+        collection_info = await client.get_collection(collection_name)
         sly.logger.debug(
-            "Collection %s has %d vectors.", collection_name, collecton_info.points_count
+            f"{msg_prefix} Qdrant Collection has {collection_info.points_count} vectors."
         )
-
-
-@with_retries()
-@timeit
-async def get_diff(collection_name: str, image_infos: List[ImageInfoLite]) -> List[ImageInfoLite]:
-    """Get the difference between ImageInfoLite objects and points from the collection.
-    Returns ImageInfoLite objects that need to be updated.
-
-    :param collection_name: The name of the collection to get items from.
-    :type collection_name: str
-    :param image_infos: A list of ImageInfoLite objects.
-    :type image_infos: List[ImageInfoLite]
-    :return: A list of ImageInfoLite objects that need to be updated.
-    :rtype: List[ImageInfoLite]
-    """
-    # Get specified ids from collection, compare updated_at and return ids that need to be updated.
-
-    ids = [image_info.image_id for image_info in image_infos]
-
-    points = await client.retrieve(collection_name=collection_name, ids=ids, with_payload=True)
-    sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
-
-    diff = _diff(image_infos, points)
-
-    sly.logger.debug("Found %d points that need to be updated.", len(diff))
-    if sly.is_development():
-        # To avoid unnecessary computations in production,
-        # only log the percentage of points that need to be updated in development.
-        percent = round(len(diff) / len(image_infos) * 100, 2) if len(image_infos) > 0 else 0
-        sly.logger.debug(
-            "From the total of %d points, %d points need to be updated. (%.2f%%)",
-            len(image_infos),
-            len(diff),
-            percent,
-        )
-
-    return diff
-
-
-@timeit
-def _diff(
-    image_infos: List[ImageInfoLite],
-    points: List[Dict[str, Any]],
-) -> List[ImageInfoLite]:
-    """Get the difference between ImageInfoLite objects and points from the collection.
-
-    :param image_infos: A list of ImageInfoLite objects.
-    :type image_infos: List[ImageInfoLite]
-    :param points: A list of dictionaries with points from the collection.
-    :type points: List[Dict[str, Any]]
-    :return: List of ImageInfoLite objects that need to be updated.
-    :rtype: List[ImageInfoLite]
-    """
-
-    # If the point with the same id doesn't exist in the collection, it will be added to the diff.
-    # If the point with the same id exsts - check if IDs are in the payload, if not - add them to the diff.
-    # Image infos and points have different length, so we need to iterate over image infos.
-    diff = []
-    points_dict = {point.id: point for point in points}
-
-    for image_info in image_infos:
-        point = points_dict.get(image_info.image_id)
-        if point is None or point.payload.get(TupleFields.UPDATED_AT) != image_info.updated_at:
-            diff.append(image_info)
-
-    return diff
 
 
 @timeit
@@ -428,7 +405,8 @@ async def get_items(
     limit: int = None,
     batch_size: int = 10000,
     with_vectors: bool = False,
-) -> Tuple[List[ImageInfoLite], List[np.ndarray]]:
+    objects: bool = False,
+) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[np.ndarray]]:
     """Returns specified number of items from the collection. If limit is not specified, returns all items.
 
     :param collection_name: The name of the collection to get items from.
@@ -439,10 +417,12 @@ async def get_items(
     :type batch_size: int, optional
     :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type with_vectors: bool, optional
-    :return: A tuple of ImageInfoLite objects and vectors.
-    :rtype: Tuple[List[ImageInfoLite], List[np.ndarray]]
+    :param objects: If True, return object embeddings instead of image embeddings.
+    :type objects: bool, optional
+    :return: A tuple of two lists: list of ImageInfoLite or ObjectInfoLite objects and list of vectors.
+    :rtype: Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[np.ndarray]]    
     """
-    all_points = []
+    all_points: List[types.Record] = []
     next_offset = None
     total = 0
 
@@ -468,14 +448,19 @@ async def get_items(
 
     all_points = all_points[:limit]
 
-    image_infos = [ImageInfoLite(image_id=point.id, **point.payload) for point in points]
+    if objects:
+        items_info = [ObjectInfoLite(id=point.id, **point.payload) for point in all_points]
+    else:
+        items_info = [ImageInfoLite(image_id=point.id, **point.payload) for point in all_points]
 
-    sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
+    sly.logger.debug(
+        f"[Project: {collection_name}] Retrieved {len(all_points)} points from Qdrant collection."
+    )
     if with_vectors:
-        vectors = [point.vector for point in points]
+        vectors = [point.vector for point in all_points]
     else:
         vectors = []
-    return image_infos, vectors
+    return items_info, vectors
 
 
 @with_retries()
@@ -485,7 +470,7 @@ async def get_items_by_id(
     item_ids: List[int],
     with_vectors: bool = False,
     objects: bool = False,
-) -> Union[List[ImageInfoLite], Tuple[List[ImageInfoLite], List[np.ndarray]]]:
+) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[np.ndarray]]:
     """Get vectors from the collection based on the image IDs.
 
     :param collection_name: The name of the collection to get vectors from.
@@ -494,8 +479,8 @@ async def get_items_by_id(
     :type image_ids: List[int]
     :param with_vectors: Whether to return vectors along with ImageInfoLite objects, defaults to False.
     :type with_vectors: bool, optional
-    :return: A list of vectors.
-    :rtype: List[np.ndarray]
+    :return: A tuple of ImageInfoLite or ObjectInfoLite objects and vectors.
+    :rtype: Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[np.ndarray]]
     """
 
     points = await client.retrieve(
@@ -536,7 +521,7 @@ async def get_item_payloads(collection_name: str, ids=List[str]) -> Dict[str, An
         with_payload=True,
         with_vectors=False,
     )
-    sly.logger.debug("Retrieved %d points from collection %s", len(points), collection_name)
+    sly.logger.debug(f"[Project: {collection_name}] Retrieved {len(points)} points from Qdrant collection.")
 
     # Create initial dictionary with all IDs set to None
     result = {str(id_): None for id_ in ids}

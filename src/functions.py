@@ -55,6 +55,7 @@ async def process_images(
     """
 
     msg_prefix = f"[Project: {project_id}]"
+    item_name = "objects" if objects else "images"
     vectors = []
     current_progress = 0
 
@@ -64,7 +65,7 @@ async def process_images(
 
     try:
         if objects:
-            # If objects are requested, download them as CollectionItems
+            # If objects are requested, download them as ObjectInfos
             to_create = await get_lite_object_infos(
                 api,
                 cas_size=g.IMAGE_SIZE_FOR_CLIP,
@@ -84,7 +85,7 @@ async def process_images(
         # Get diff of image infos, check if they are already in the Qdrant collection
 
         if check_collection_exists:
-            await qdrant.get_or_create_collection(project_id)
+            await qdrant.get_or_create_collection(project_id, objects=objects)
 
         current_progress = 0
         total_progress = len(to_create)
@@ -94,9 +95,9 @@ async def process_images(
             await set_processing_progress(project_id, total_progress, 0, "processing")
 
         if len(to_create) > 0:
-            logger.debug(f"{msg_prefix} Images to be vectorized: {total_progress}.")
+            logger.debug(f"{msg_prefix} {item_name} to be vectorized: {total_progress}.")
             for items_batch in sly.batched(to_create):
-                # Download images as bytes and create Document objects
+                # Download images (or cropped images for objects) as bytes and create Document objects
                 item_urls = [item_info.cas_url for item_info in items_batch]
                 image_bytes_list = await download_resized_images(item_urls)
                 # Create Document objects with blob data
@@ -105,7 +106,7 @@ async def process_images(
                 # Get vectors from images using Document objects.
                 vectors_batch = await cas.get_vectors(queries)
                 vectors_batch = fix_vectors(vectors_batch)
-                logger.debug(f"{msg_prefix} Got {len(vectors_batch)} vectors for images.")
+                logger.debug(f"{msg_prefix} Got {len(vectors_batch)} vectors for {item_name}.")
 
                 # Upsert vectors to Qdrant.
                 await qdrant.upsert(project_id, vectors_batch, items_batch)
@@ -122,19 +123,19 @@ async def process_images(
                 if return_vectors:
                     vectors.extend(vectors_batch)
 
-            logger.debug(f"{msg_prefix} All {total_progress} images have been vectorized.")
+            logger.debug(f"{msg_prefix} All {total_progress} {item_name} have been vectorized.")
             # Mark as completed
             await update_processing_progress(project_id, current_progress, "completed")
 
         if len(to_delete) > 0:
-            logger.debug(f"{msg_prefix} Vectors for images to be deleted: {len(to_delete)}.")
+            logger.debug(f"{msg_prefix} Vectors for {item_name} to be deleted: {len(to_delete)}.")
             for items_batch in sly.batched(to_delete):
-                # Delete images from the Qdrant.
+                # Delete embeddings from the Qdrant.
                 await qdrant.delete_collection_items(
-                    collection_name=project_id, items_info=items_batch
+                    collection_name=project_id, items_info=items_batch, objects=objects
                 )
                 await set_image_embeddings_updated_at(api, items_batch, [None] * len(items_batch))
-                logger.debug(f"{msg_prefix} Deleted {len(items_batch)} images from Qdrant.")
+                logger.debug(f"{msg_prefix} Deleted {len(items_batch)} {item_name} from Qdrant.")
 
         logger.info(
             f"{msg_prefix} Embeddings Created: {len(to_create)}, Deleted: {len(to_delete)}."

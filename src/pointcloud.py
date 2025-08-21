@@ -1,7 +1,7 @@
 import os
 import tempfile
 from collections import namedtuple
-from typing import Iterable, List, Union
+from typing import Iterable, List, Union, Optional
 
 import numpy as np
 import supervisely as sly
@@ -35,12 +35,12 @@ class EmbeddingsVisPCD:
 
     _default_fields = ["x", "y", "z"]
     _default_fields_types = [np.float32, np.float32, np.float32]
-    _extra_fields = ["rgb", "imageId", "objectId", "clusterId", "atlasId", "atlasIndex"]
-    _extra_fields_types = [np.uint32, np.int32, np.int32, np.int32, np.int32, np.int32]
+    _extra_fields = ["imageId", "objectId", "rgb", "clusterId", "atlasId", "atlasIndex"]
+    _extra_fields_types = [np.int32, np.int32, np.uint32, np.int32, np.int32, np.int32]
     _extra_fields_attrs = [
-        "colors",
         "image_ids",
         "object_ids",
+        "colors",
         "cluster_ids",
         "atlas_ids",
         "atlas_indices",
@@ -50,16 +50,16 @@ class EmbeddingsVisPCD:
     def __init__(
         self,
         points: np.ndarray,
-        colors=None,
         image_ids=None,
         object_ids=None,
+        colors=None,
         cluster_ids=None,
         atlas_ids=None,
         atlas_indices=None,
     ):
-        self._colors = None
         self._image_ids = None
         self._object_ids = None
+        self._colors = None
         self._cluster_ids = None
         self._atlas_ids = None
         self._atlas_indices = None
@@ -200,12 +200,12 @@ class EmbeddingsVisPCD:
 def upload(
     api: sly.Api,
     pointcloud: np.ndarray,
-    image_ids: List[int],
+    image_ids: Optional[List[int]],
     pcd_name: str,
     dataset_id: int,
-    cluster_ids: List[int] = None,
-    object_ids: List[int] = None,
-    colors: List = None,
+    cluster_ids: Optional[List[int]] = None,
+    object_ids: Optional[List[int]] = None,
+    colors: Optional[List] = None,
 ) -> sly.api.pointcloud_api.PointcloudInfo:
     if not isinstance(pointcloud, np.ndarray):
         pointcloud = np.array(pointcloud)

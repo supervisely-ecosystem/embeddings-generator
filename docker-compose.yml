@@ -9,7 +9,7 @@ services:
         limits:
           memory: 4G
     environment:
-      ENV: "production" # production, development, etc.
+      ENV: "${ENV}" # production, development, etc.
       LOG_LEVEL: "${LOG_LEVEL}"
       SERVER_ADDRESS: "${SERVER_ADDRESS}" # one of the public or internal addresses of the Supervisely server must be provided
       SUPERVISELY_API_SERVER_ADDRESS: "${SUPERVISELY_API_SERVER_ADDRESS}" # one of the public or internal addresses of the Supervisely server must be provided

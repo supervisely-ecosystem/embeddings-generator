@@ -6,7 +6,8 @@ from typing import List, Optional, Tuple, Union
 import supervisely as sly
 from fastapi.responses import JSONResponse
 from supervisely.api.file_api import FileInfo
-
+import numpy as np
+from sklearn.cluster import KMeans
 import src.globals as g
 import src.qdrant as qdrant
 from src.pointcloud import download as download_pcd
@@ -61,7 +62,7 @@ async def create_projections(
     project_id: int,
     dataset_id: int = None,
     image_ids: List[int] = None,
-    objects: bool = True,
+    objects: bool = False,
 ) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[List[float]]]:
 
     msg_prefix = f"[Project: {project_id}]"
@@ -86,16 +87,16 @@ async def create_projections(
 
         item_ids = []
         for dataset_id, image_infos in ds_img_map.items():
-            ds_image_ids = [image_info.id for image_info in image_infos]
-            for batch in sly.batched(ds_image_ids, batch_size=300):
-                figures = await api.image.figure.download_async(
-                    dataset_id=dataset_id,
-                    image_ids=batch,
-                    skip_geometry=True,
-                )
-                for _, figure_infos in figures.items():
-                    figure_ids = [figure_info.id for figure_info in figure_infos]
-                    item_ids.extend(figure_ids)
+            ds_image_ids = [image_info.id for image_info in image_infos]            
+            figures = await api.image.figure.download_async(
+                dataset_id=dataset_id,
+                image_ids=ds_image_ids,
+                log_progress=False,
+                skip_geometry=True,
+            )
+            for _, figure_infos in figures.items():
+                figure_ids = [figure_info.id for figure_info in figure_infos]
+                item_ids.extend(figure_ids)
     else:
         item_ids = [info.id for info in image_infos]
 
@@ -119,14 +120,12 @@ async def create_projections(
         retries=3,
         raise_error=True,
     )
-    # import numpy as np
-    # from sklearn.cluster import KMeans
+    
+    n_clusters = min(8, len(projections)) #TODO determine n_clusters dynamically
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    cluster_labels = kmeans.fit_predict(np.array(projections))
 
-    # n_clusters = min(8, len(projections))
-    # kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    # cluster_labels = kmeans.fit_predict(np.array(projections))
-
-    return retrieved_item_info, projections  # , cluster_labels.tolist()
+    return retrieved_item_info, projections, cluster_labels.tolist()
 
 
 @timeit
@@ -169,10 +168,10 @@ async def save_projections(
         return pcd_info
 
     if isinstance(items_info[0], ObjectInfoLite):
-        image_ids = [info.image_id for info in items_info]
+        image_ids = None
         object_ids = [info.id for info in items_info]
     elif isinstance(items_info[0], ImageInfoLite):
-        image_ids = [info.image_id for info in items_info]
+        image_ids = [info.id for info in items_info]
         object_ids = None
 
     pcd_info = await upload_pcd(
@@ -239,7 +238,7 @@ async def get_projections(
 
     pcd = await download_pcd(api, pcd_info.id)
     vectors = pcd.points[:, :2]
-    # cluster_labels = pcd.cluster_ids
+    cluster_labels = pcd.cluster_ids
     image_ids = pcd.image_ids
     object_ids = pcd.object_ids
     if len(object_ids) > 0:
@@ -258,7 +257,7 @@ async def get_projections(
             image_ids=image_ids,
             imgproxy_address=g.imgproxy_address,
         )
-    return items_info, vectors.tolist()  # , cluster_labels.tolist()
+    return items_info, vectors.tolist(), cluster_labels.tolist()
 
 
 async def get_or_create_projections_dataset(
@@ -302,7 +301,12 @@ async def is_projections_up_to_date(
     return parse_timestamp(pcd_info.updated_at) >= parse_timestamp(project_info.updated_at)
 
 
-async def get_or_create_projections(api: sly.Api, project_id, project_info):
+async def get_or_create_projections(
+    api: sly.Api,
+    project_id: int,
+    project_info: sly.ProjectInfo,
+    objects: bool = False,
+) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[List[float]]]:
     """
     Retrieves existing projections for a project or creates new ones if needed.
 
@@ -312,7 +316,7 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
     """
     replace = False
     if project_info is None:
-        project_info = api.project.get_info_by_id(project_id)
+        project_info = await get_project_info(api, project_id)
 
     pcd_info = None
     try:
@@ -335,10 +339,11 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
 
     if pcd_info is None:
         # create new projections
-        items_info, projections = await create_projections(  # , cluster_labels
+        items_info, projections, cluster_labels = await create_projections(
             api,
             project_id,
             # image_ids=image_ids, #TODO add before release projections endpoints
+            objects=objects,
         )
         if items_info is None or projections is None:
             return items_info, projections
@@ -350,12 +355,12 @@ async def get_or_create_projections(api: sly.Api, project_id, project_info):
             items_info=items_info,
             projections=projections,
             project_info=project_info,
-            # cluster_labels=cluster_labels,
+            cluster_labels=cluster_labels,
             replace=replace,
         )
     else:
-        items_info, projections = await get_projections(  # , cluster_labels
+        items_info, projections, cluster_labels = await get_projections(
             api, project_id, project_info=project_info, pcd_info=pcd_info
         )
 
-    return items_info, projections  # , cluster_labels
+    return items_info, projections, cluster_labels

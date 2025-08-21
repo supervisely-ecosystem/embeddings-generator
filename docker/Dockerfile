@@ -1,4 +1,4 @@
-FROM supervisely/base-py-sdk:6.73.415
+FROM supervisely/base-py-sdk:6.73.420
 
 COPY dev_requirements.txt /req/dev_requirements.txt
 

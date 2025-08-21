@@ -13,7 +13,7 @@ class Event:
             force: Optional[bool],
             image_ids: Optional[List[int]],
             return_vectors: Optional[bool] = False,
-            objects: Optional[bool] = True,  #! Set to False before release
+            objects: Optional[bool] = False,
         ):
             self.project_id = project_id
             self.force = force
