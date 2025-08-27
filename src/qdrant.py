@@ -386,7 +386,7 @@ async def search(
     result = {}
 
     result[SearchResultField.ITEMS] = [
-        ImageInfoLite(image_id=point.id, **point.payload) for point in response.points
+        ImageInfoLite(id=point.id, **point.payload) for point in response.points
     ]
 
     if return_vectors:
@@ -451,7 +451,7 @@ async def get_items(
     if objects:
         items_info = [ObjectInfoLite(id=point.id, **point.payload) for point in all_points]
     else:
-        items_info = [ImageInfoLite(image_id=point.id, **point.payload) for point in all_points]
+        items_info = [ImageInfoLite(id=point.id, **point.payload) for point in all_points]
 
     sly.logger.debug(
         f"[Project: {collection_name}] Retrieved {len(all_points)} points from Qdrant collection."
