@@ -3,11 +3,12 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
+import numpy as np
 import supervisely as sly
 from fastapi.responses import JSONResponse
-from supervisely.api.file_api import FileInfo
-import numpy as np
 from sklearn.cluster import KMeans
+from supervisely.api.file_api import FileInfo
+
 import src.globals as g
 import src.qdrant as qdrant
 from src.pointcloud import download as download_pcd
@@ -87,7 +88,7 @@ async def create_projections(
 
         item_ids = []
         for dataset_id, image_infos in ds_img_map.items():
-            ds_image_ids = [image_info.id for image_info in image_infos]            
+            ds_image_ids = [image_info.id for image_info in image_infos]
             figures = await api.image.figure.download_async(
                 dataset_id=dataset_id,
                 image_ids=ds_image_ids,
@@ -120,12 +121,15 @@ async def create_projections(
         retries=3,
         raise_error=True,
     )
-    
-    n_clusters = min(8, len(projections)) #TODO determine n_clusters dynamically
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    cluster_labels = kmeans.fit_predict(np.array(projections))
 
-    return retrieved_item_info, projections, cluster_labels.tolist()
+    if not objects:
+        n_clusters = min(8, len(projections))  # TODO determine n_clusters dynamically
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        cluster_ids = kmeans.fit_predict(np.array(projections))
+        cluster_ids_list = cluster_ids.tolist()
+    else:
+        cluster_ids_list = None
+    return retrieved_item_info, projections, cluster_ids_list
 
 
 @timeit
@@ -135,7 +139,7 @@ async def save_projections(
     items_info: List[Union[ImageInfoLite, ObjectInfoLite]],
     projections: List[List[float]],
     project_info: Optional[sly.ProjectInfo] = None,
-    object_ids: List[int] = None,
+    cluster_ids: List[int] = None,
     replace: bool = False,
 ) -> sly.api.pointcloud_api.PointcloudInfo:
     """Saves projections to a PCD file and uploads it to the point cloud project.
@@ -145,7 +149,7 @@ async def save_projections(
     :param image_infos: List of image information objects containing image IDs and other metadata
     :param projections: List of 2D projection vectors corresponding to the images
     :param project_info: Optional project information object, if not provided it will be fetched
-    :param cluster_labels: object_ids
+    :param cluster_ids: IDs of clusters for each projection point, if available
     :param replace: If True, replaces the existing PCD file with the new one
     :return: Point cloud information object containing details about the uploaded PCD file
     """
@@ -180,6 +184,7 @@ async def save_projections(
         image_ids=image_ids,
         pcd_name=get_projections_pcd_name(),
         dataset_id=pcd_dataset_info.id,
+        cluster_ids=cluster_ids,
         object_ids=object_ids,
     )
     return pcd_info
@@ -238,7 +243,7 @@ async def get_projections(
 
     pcd = await download_pcd(api, pcd_info.id)
     vectors = pcd.points[:, :2]
-    cluster_labels = pcd.cluster_ids
+    # cluster_labels = pcd.cluster_ids #? do we need to use it later
     image_ids = pcd.image_ids
     object_ids = pcd.object_ids
     if len(object_ids) > 0:
@@ -257,7 +262,7 @@ async def get_projections(
             image_ids=image_ids,
             imgproxy_address=g.imgproxy_address,
         )
-    return items_info, vectors.tolist(), cluster_labels.tolist()
+    return items_info, vectors.tolist()
 
 
 async def get_or_create_projections_dataset(
@@ -339,7 +344,7 @@ async def get_or_create_projections(
 
     if pcd_info is None:
         # create new projections
-        items_info, projections, cluster_labels = await create_projections(
+        items_info, projections, cluster_ids = await create_projections(
             api,
             project_id,
             # image_ids=image_ids, #TODO add before release projections endpoints
@@ -355,12 +360,12 @@ async def get_or_create_projections(
             items_info=items_info,
             projections=projections,
             project_info=project_info,
-            cluster_labels=cluster_labels,
+            cluster_ids=cluster_ids,
             replace=replace,
         )
     else:
-        items_info, projections, cluster_labels = await get_projections(
+        items_info, projections = await get_projections(
             api, project_id, project_info=project_info, pcd_info=pcd_info
         )
 
-    return items_info, projections, cluster_labels
+    return items_info, projections
