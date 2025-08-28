@@ -1,5 +1,5 @@
 from asyncio import sleep as asyncio_sleep
-from typing import List, Optional, Tuple
+from typing import AsyncGenerator, List, Optional, Tuple
 
 import supervisely as sly
 from docarray import Document
@@ -23,6 +23,47 @@ from src.utils import (
     timeit,
     update_processing_progress,
 )
+
+
+async def process_images_generator(
+    api: sly.Api,
+    project_id: int,
+    to_create: List[sly.ImageInfo],
+    objects: bool = False,
+    batch_size: int = 50,
+) -> AsyncGenerator[List[sly.ImageInfo], None]:
+    """Generator that yields batches of processed lite image/object infos.
+
+    :param api: Supervisely API object.
+    :type api: sly.Api
+    :param project_id: Project ID to process images from.
+    :type project_id: int
+    :param to_create: List of image infos to process.
+    :type to_create: List[sly.ImageInfo]
+    :param objects: If True, process as objects instead of images.
+    :type objects: bool
+    :param batch_size: Size of each batch. If None, uses sly.batched default.
+    :type batch_size: int
+    :return: AsyncGenerator yielding batches of processed lite infos.
+    :rtype: AsyncGenerator[List[sly.ImageInfo], None]
+    """
+
+    for batch in sly.batched(to_create, batch_size):
+        if objects:
+            processed_batch = await get_lite_object_infos(
+                api,
+                cas_size=g.IMAGE_SIZE_FOR_CLIP,
+                project_id=project_id,
+                image_infos=batch,
+                imgproxy_address=g.imgproxy_address,
+            )
+        else:
+            processed_batch = await create_lite_image_infos(
+                cas_size=g.IMAGE_SIZE_FOR_CLIP,
+                image_infos=batch,
+                imgproxy_address=g.imgproxy_address,
+            )
+        yield processed_batch
 
 
 @timeit
@@ -64,31 +105,13 @@ async def process_images(
         return to_create, vectors
 
     try:
-        if objects:
-            # If objects are requested, download them as ObjectInfos
-            to_create = await get_lite_object_infos(
-                api,
-                cas_size=g.IMAGE_SIZE_FOR_CLIP,
-                project_id=project_id,
-                image_infos=to_create,
-                imgproxy_address=g.imgproxy_address,
-            )
-        else:
-            # If only images are requested, download them as ImageInfos
-            to_create = await create_lite_image_infos(
-                cas_size=g.IMAGE_SIZE_FOR_CLIP,
-                image_infos=to_create,
-                imgproxy_address=g.imgproxy_address,
-            )
-
-        # if await qdrant.collection_exists(project_id):
-        # Get diff of image infos, check if they are already in the Qdrant collection
+        # Calculate total progress beforehand without processing all items
+        total_progress = len(to_create)
 
         if check_collection_exists:
             await qdrant.get_or_create_collection(project_id, objects=objects)
 
         current_progress = 0
-        total_progress = len(to_create)
 
         # Initialize progress tracking
         if total_progress > 0:
@@ -96,7 +119,11 @@ async def process_images(
 
         if len(to_create) > 0:
             logger.debug(f"{msg_prefix} {item_name} to be vectorized: {total_progress}.")
-            for items_batch in sly.batched(to_create):
+
+            # Use generator to process items in batches without loading all in memory
+            async for items_batch in process_images_generator(
+                api=api, project_id=project_id, to_create=to_create, objects=objects
+            ):
                 # Download images (or cropped images for objects) as bytes and create Document objects
                 item_urls = [item_info.cas_url for item_info in items_batch]
                 image_bytes_list = await download_resized_images(item_urls)
@@ -144,6 +171,7 @@ async def process_images(
         await asyncio_sleep(1)  # Brief delay to allow final status to be read
         await clear_processing_progress(project_id)
 
+        # Return the original to_create list, as we process it in batches without storing processed items
         return to_create, vectors
 
     except Exception as e:
