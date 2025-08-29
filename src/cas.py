@@ -35,9 +35,9 @@ class SlyCasClient(Client):
             if self._scheme == "https":
                 _new_port = 443
             elif self._scheme == "http":
-                _new_port = 80
+                _new_port = 8000
             else:
-                _new_port = _port if _port else 80
+                _new_port = _port if _port else 8000
         except:
             raise ValueError(f"{server} is not a valid scheme")
 

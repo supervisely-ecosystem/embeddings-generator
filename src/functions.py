@@ -9,6 +9,8 @@ import src.cas as cas
 import src.globals as g
 import src.qdrant as qdrant
 from src.utils import (
+    ImageInfoLite,
+    ObjectInfoLite,
     clear_processing_progress,
     create_lite_image_infos,
     download_resized_images,
@@ -25,12 +27,12 @@ from src.utils import (
 )
 
 
-async def process_images_generator(
+async def process_items_generator(
     api: sly.Api,
     project_id: int,
     to_create: List[sly.ImageInfo],
     objects: bool = False,
-    batch_size: int = 50,
+    batch_size: int = 1000,
 ) -> AsyncGenerator[List[sly.ImageInfo], None]:
     """Generator that yields batches of processed lite image/object infos.
 
@@ -118,12 +120,16 @@ async def process_images(
             await set_processing_progress(project_id, total_progress, 0, "processing")
 
         if len(to_create) > 0:
-            logger.debug(f"{msg_prefix} {item_name} to be vectorized: {total_progress}.")
+            logger.debug(
+                f"{msg_prefix} {item_name} to be vectorized {'for images in a number of' if not objects else ''}: {total_progress}."
+            )
 
             # Use generator to process items in batches without loading all in memory
-            async for items_batch in process_images_generator(
+            async for items_batch in process_items_generator(
                 api=api, project_id=project_id, to_create=to_create, objects=objects
             ):
+                if len(items_batch) == 0:
+                    continue
                 # Download images (or cropped images for objects) as bytes and create Document objects
                 item_urls = [item_info.cas_url for item_info in items_batch]
                 image_bytes_list = await download_resized_images(item_urls)
@@ -137,7 +143,13 @@ async def process_images(
 
                 # Upsert vectors to Qdrant.
                 await qdrant.upsert(project_id, vectors_batch, items_batch)
-                current_progress += len(items_batch)
+
+                if isinstance(items_batch[0], ImageInfoLite):
+                    processed_items_num = len(items_batch)
+                else:  # isinstance(items_batch[0], ObjectInfoLite):
+                    processed_items_num = [item.image_id for item in items_batch]
+                    processed_items_num = len(list(set(processed_items_num)))
+                current_progress += processed_items_num
 
                 # Update progress
                 await update_processing_progress(project_id, current_progress, "processing")

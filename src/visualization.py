@@ -64,7 +64,7 @@ async def create_projections(
     dataset_id: int = None,
     image_ids: List[int] = None,
     objects: bool = False,
-) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[List[float]]]:
+) -> Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[List[float]], List[int]]:
 
     msg_prefix = f"[Project: {project_id}]"
 
@@ -105,22 +105,59 @@ async def create_projections(
         project_id, item_ids, with_vectors=True, objects=objects
     )
 
+    # Check for very large datasets and warn
+    num_items = len(vectors)
+    if num_items > g.PROJECTIONS_LARGE_DATASET_THRESHOLD:
+        sly.logger.warning(
+            f"{msg_prefix} Large dataset detected ({num_items} items). This may take a very long time to process."
+        )
+
+    if num_items == 0:
+        sly.logger.warning(f"{msg_prefix} No vectors found for projection.")
+        return [], [], []
+
     try:
         projections_service_task_id = await start_projections_service(api, project_id)
     except Exception as e:
         message = f"{msg_prefix} Failed to start projections service: {str(e)}"
         sly.logger.error(message, exc_info=True)
-        return None, None
+        return None, None, None
 
-    projections = await send_request(
-        api,
-        projections_service_task_id,
-        "projections",
-        data={"vectors": vectors, "method": "umap"},
-        timeout=60 * 5,
-        retries=3,
-        raise_error=True,
+    # Calculate timeout based on dataset size
+    base_timeout = g.PROJECTIONS_BASE_TIMEOUT
+    # Add 1 second per item, with configurable maximum
+    dynamic_timeout = min(base_timeout + num_items, g.PROJECTIONS_MAX_TIMEOUT)
+
+    sly.logger.info(
+        f"{msg_prefix} Creating projections for {num_items} items with timeout {dynamic_timeout}s"
     )
+
+    try:
+        projections = await send_request(
+            api,
+            projections_service_task_id,
+            "projections",
+            data={"vectors": vectors, "method": "umap"},
+            timeout=dynamic_timeout,
+            retries=2,  # Reduced retries since timeout is longer
+            raise_error=True,
+        )
+    except Exception as e:
+        if "ReadTimeout" in str(e) or "timeout" in str(e).lower():
+            message = (
+                f"{msg_prefix} Projections generation timed out after {dynamic_timeout}s for {num_items} items. "
+                f"This typically happens with large datasets or high-dimensional vectors. "
+                f"Consider: 1) Processing fewer items at once, 2) Using a more powerful server, "
+                f"3) Checking if the projections service is responsive."
+            )
+            sly.logger.error(message)
+            return None, None, None
+        else:
+            message = f"{msg_prefix} Error during projections generation: {str(e)}"
+            sly.logger.error(message, exc_info=True)
+            return None, None, None
+
+    sly.logger.info(f"{msg_prefix} Successfully created projections for {num_items} items")
 
     if not objects:
         n_clusters = min(8, len(projections))  # TODO determine n_clusters dynamically

@@ -1,0 +1,15 @@
+jtype: Flow
+version: '1'
+with:
+  port: 8000
+  protocol: 'http'
+  cors: True
+executors:
+  - name: clip_t
+    uses:
+      jtype: CLIPEncoder
+      metas:
+        py_modules:
+          - clip_server.executors.clip_torch
+    timeout_ready: 300000
+    replicas: 1

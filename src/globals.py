@@ -74,9 +74,16 @@ sly.logger.info("Imgproxy concurrency: %s", imgproxy_concurrency)
 
 # region constants
 IMAGE_SIZE_FOR_CLIP = 224
+# Projections timeout configuration
+PROJECTIONS_BASE_TIMEOUT = int(os.getenv("PROJECTIONS_BASE_TIMEOUT", 300))  # 5 minutes default
+PROJECTIONS_MAX_TIMEOUT = int(os.getenv("PROJECTIONS_MAX_TIMEOUT", 1800))  # 30 minutes default
+PROJECTIONS_LARGE_DATASET_THRESHOLD = int(os.getenv("PROJECTIONS_LARGE_DATASET_THRESHOLD", 10000))
 # endregion
 
 sly.logger.debug("Image size for CLIP: %s", IMAGE_SIZE_FOR_CLIP)
+sly.logger.debug("Projections base timeout: %s seconds", PROJECTIONS_BASE_TIMEOUT)
+sly.logger.debug("Projections max timeout: %s seconds", PROJECTIONS_MAX_TIMEOUT)
+sly.logger.debug("Large dataset threshold: %s items", PROJECTIONS_LARGE_DATASET_THRESHOLD)
 
 background_tasks = {}
 

@@ -337,7 +337,7 @@ def with_retries(retries: int = 3, sleep_time: int = 1, on_failure: Callable = N
 
 @to_thread
 @timeit
-def get_datasets(api: sly.Api, project_id: int, recursive: bool = False) -> List[sly.DatasetInfo]:
+def get_datasets(api: sly.Api, project_id: int, recursive: bool = False, filters: List[Dict[str, str]] = None) -> List[sly.DatasetInfo]:
     """Returns list of datasets from the project.
 
     :param api: Instance of supervisely API.
@@ -347,7 +347,7 @@ def get_datasets(api: sly.Api, project_id: int, recursive: bool = False) -> List
     :return: List of datasets.
     :rtype: List[sly.DatasetInfo]
     """
-    return api.dataset.get_list(project_id, recursive=recursive)
+    return api.dataset.get_list(project_id, filters=filters, recursive=recursive)
 
 
 @to_thread
@@ -866,27 +866,38 @@ async def get_lite_object_infos(
     original_image_ids = image_ids
     dataset_images_map = None
 
+    # ------------------ 1. If image_infos Are Provided, Build A Mapping By Dataset ------------------ #
     if image_infos is not None and len(image_infos) > 0:
         sly.logger.debug(f"{msg_prefix} Creating lite object infos from image_infos")
-        dataset_images_map = {}
+        dataset_images_map = {} # Exists only if image_infos are provided
         for image_info in image_infos:
             if image_info.dataset_id not in dataset_images_map:
                 dataset_images_map[image_info.dataset_id] = []
             dataset_images_map[image_info.dataset_id].append(image_info.id)
 
-    if not object_infos or len(object_infos) == 0:
+    # -------------------- 2. If object_infos Are Not Provided, Need To Fetch Them ------------------- #
+    if object_infos is None or len(object_infos) == 0:
         sly.logger.debug(f"{msg_prefix} No object_infos provided, fetching from API")
         object_infos = []
-        ds_image_info_list = []
-        dataset_infos = await get_datasets(api, project_id, recursive=True)
+        all_image_info_list = []
+        if dataset_images_map is None:
+            dataset_infos = await get_datasets(api, project_id, recursive=True)
+        else:
+            dataset_ids = list(dataset_images_map.keys())
+            dataset_infos = []
+            for ds_batch in batched(dataset_ids):
+                filters = [{"field": "id", "operator": "in", "value": ds_batch}]
+                ds_infos = await get_datasets(api, project_id, recursive=True, filters=filters)
+                if ds_infos is not None or len(ds_infos) > 0:
+                    dataset_infos.extend(ds_infos)
 
         for dataset_info in dataset_infos:
             # Determine which image_ids to use for this dataset
-            current_image_ids = None
+            ds_image_ids = None
 
             if image_infos is not None and dataset_info.id in dataset_images_map:
                 # Use image IDs from image_infos for this specific dataset
-                current_image_ids = dataset_images_map[dataset_info.id]
+                ds_image_ids = dataset_images_map[dataset_info.id]
             else:
                 # Fetch image infos from API, using original_image_ids if provided
                 sly.logger.debug(
@@ -907,23 +918,25 @@ async def get_lite_object_infos(
                     f"{msg_prefix} Fetched {len(ds_image_infos)} image_infos from API for dataset {dataset_info.id}"
                 )
 
-                current_image_ids = [image_info.id for image_info in ds_image_infos]
-                ds_image_info_list.extend(ds_image_infos)
-            ds_object_infos = []
+                ds_image_ids = [image_info.id for image_info in ds_image_infos]
+                all_image_info_list.extend(ds_image_infos)
+
             figures = await api.image.figure.download_async(
                 dataset_id=dataset_info.id,
-                image_ids=current_image_ids,
+                image_ids=ds_image_ids,
                 log_progress=False,
                 skip_geometry=True,
             )
-            for _, figures in figures.items():
-                ds_object_infos.extend(figures)
 
-            if ds_object_infos:
+            ds_figure_infos = []
+            for _, figures in figures.items():
+                ds_figure_infos.extend(figures)
+
+            if ds_figure_infos:
                 sly.logger.debug(
-                    f"{msg_prefix} Downloaded {len(ds_object_infos)} object_infos for dataset {dataset_info.id}"
+                    f"{msg_prefix} Downloaded {len(ds_figure_infos)} object_infos for dataset {dataset_info.id}"
                 )
-                object_infos.extend(ds_object_infos)
+                object_infos.extend(ds_figure_infos)
             else:
                 sly.logger.debug(
                     f"{msg_prefix} No object_infos found for dataset {dataset_info.id}"
@@ -940,9 +953,9 @@ async def get_lite_object_infos(
     # Determine final image_infos to use
     if image_infos is None:
         sly.logger.debug(
-            f"{msg_prefix} Using ds_image_info_list as image_infos ({len(ds_image_info_list)} images)"
+            f"{msg_prefix} Using ds_image_info_list as image_infos ({len(all_image_info_list)} images)"
         )
-        image_infos = ds_image_info_list
+        image_infos = all_image_info_list
     else:
         sly.logger.debug(f"{msg_prefix} Using provided image_infos ({len(image_infos)} images)")
 
@@ -1865,4 +1878,7 @@ def set_embeddings_type(api: sly.Api, project_id: int, objects: bool = False):
     custom_data = api.project.get_custom_data(project_id)
     custom_data[CustomDataFields.EMBEDDINGS_TYPE] = embeddings_type
     api.project.update_custom_data(project_id, custom_data, silent=True)
+    sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")
+    sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")
+    sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")
     sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")

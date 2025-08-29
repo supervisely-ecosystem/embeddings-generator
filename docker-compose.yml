@@ -1,6 +1,35 @@
 services:
+  clip-as-service-local:
+    image: supervisely/deploy-cas:0.1.3
+    pull_policy: always
+    entrypoint: ["python", "-m", "clip_server", "/app/clip.yml"]
+    volumes:
+      - ./clip.yml:/app/clip.yml:ro
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+    ports:
+      - 34600:8000
+  qdrant-local:
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+    image: ${CORE_DOCKER_REGISTRY}/dockerhub/qdrant/qdrant
+    logging:
+      driver: local
+      options:
+        compress: "false"
+        max-file: "1"
+        max-size: 1m
+    restart: "no"
+    runtime: runc
+    ports:
+      - "34603:6333"
+      - "34604:6334"
   embeddings-generator:
-    image: supervisely/embeddings-generator:${VERSION}
+    image: supervisely/embeddings-generator:${GENERATOR_VERSION}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -16,13 +45,13 @@ services:
       SUPERVISELY_NET_SERVER_ADDRESS: "${SUPERVISELY_NET_SERVER_ADDRESS}" # Supervisely network endpoint, e.g. http://sly-net-server
       SUPERVISELY_API_ACCESS_TOKEN: "${SUPERVISELY_API_ACCESS_TOKEN}" # access token for Supervisely API
       API_TOKEN: "${API_TOKEN}" # you could set token for both publick and internal addresses, in case of internal address it will skip retrieving token from the server
-      QDRANT_HOST: "${QDRANT_HOST}"
-      CLIP_HOST: "${CLIP_HOST}" # CLIP application service, dont pass anything to search any available app instance automatically
+      QDRANT_HOST: "http://10.62.10.13:34603"
+      CLIP_HOST: "${CLIP_HOST}" # CLIP application service, using local service from docker-compose
       IMGPROXY_ADDRESS: "${IMGPROXY_ADDRESS}" # Imgproxy service, e.g. http://imgproxy/
       IMGPROXY_CONCURRENCY: "${IMGPROXY_CONCURRENCY}" # concurrency for Imgproxy service
     labels:
       proxy.app: embeddings-generator
-      supervisely.logs.app: embeddings-generator-logs
+      supervisely.logs.app: embeddings-generator-dev
     volumes:
       - ./src:/app/src:ro
       - ./project_embeddings_state:/app/state
@@ -32,4 +61,38 @@ services:
       options:
         compress: "false"
     ports:
-      - 30303:80
+      - 34601:80
+ 
+  embeddings-auto-updater:
+    image: supervisely/embeddings-auto-updater:${AUTO_UPDATER_VERSION}
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    environment:
+      ENV: "production" # production, development, etc.
+      LOG_LEVEL: "${LOG_LEVEL}"
+      SERVER_ADDRESS: "${SERVER_ADDRESS}" # one of the public or internal addresses of the Supervisely server must be provided
+      SUPERVISELY_API_SERVER_ADDRESS: "${SUPERVISELY_API_SERVER_ADDRESS}" # one of the public or internal addresses of the Supervisely server must be provided
+      SUPERVISELY_NET_SERVER_ADDRESS: "${SUPERVISELY_NET_SERVER_ADDRESS}" # Supervisely network endpoint, e.g. http://sly-net-server
+      SUPERVISELY_API_ACCESS_TOKEN: "${SUPERVISELY_API_ACCESS_TOKEN}" # access token for Supervisely API
+      API_TOKEN: "${API_TOKEN}" # you could set token for both publick and internal addresses, in case of internal address it will skip retrieving token from the server
+      QDRANT_HOST: "http://10.62.10.13:34603"
+      CLIP_HOST: "${CLIP_HOST}" # CLIP application service, using local service from docker-compose
+      GENERATOR_HOST: "embeddings-generator" # embeddings generator service, must be provided
+      IMGPROXY_ADDRESS: "${IMGPROXY_ADDRESS}" # Imgproxy service, e.g. http://imgproxy/
+      IMGPROXY_CONCURRENCY: "${IMGPROXY_CONCURRENCY}" # concurrency for Imgproxy service
+      UPDATE_INTERVAL: ${UPDATE_INTERVAL} # minutes, default is 10 minutes
+      UPDATE_FRAME: ${UPDATE_FRAME} # hours, default is 12 hours
+    labels:
+      proxy.app: embeddings-auto-updater
+      supervisely.logs.app: embeddings-auto-updater-dev
+    volumes:
+      - ./project_embeddings_autostate:/app/state
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        compress: "false"
+    ports:
+      - 34602:80
