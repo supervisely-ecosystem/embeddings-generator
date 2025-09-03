@@ -3,6 +3,7 @@ import base64
 import datetime
 import hashlib
 import json
+import tracemalloc
 import urllib.parse
 import uuid
 from dataclasses import dataclass
@@ -14,7 +15,8 @@ import aiohttp
 import supervisely as sly
 from supervisely._utils import batched
 from supervisely.api.app_api import SessionInfo
-from supervisely.api.entities_collection_api import CollectionItem, CollectionType
+from supervisely.api.entities_collection_api import (CollectionItem,
+                                                     CollectionType)
 from supervisely.api.module_api import ApiField
 
 PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
@@ -60,6 +62,36 @@ class QdrantFields:
     IMAGE_ID = "image_id"
     CLASS_ID = "class_id"
     ID = "id"
+
+
+class MilvusFields:
+    """Fields for the queries to the Milvus API."""
+
+    DATASET_ID = "dataset_id"
+    IMAGE_ID = "image_id"
+    CLASS_ID = "class_id"
+    ID = "id"
+    VECTOR = "vector"
+    FULL_URL = "full_url"
+    CAS_URL = "cas_url"
+    ENTITY = "entity"
+
+    INDEX_TYPE = "index_type"
+    METRIC_TYPE = "metric_type"
+    PARAMS = "params"
+    FIELD_NAME = "field_name"
+    DISTANCE = "distance"
+
+
+class MilvusParams:
+    IVF_FLAT = "IVF_FLAT"
+    IVF_SQ8 = "IVF_SQ8"
+    HNSW = "HNSW"
+    NPROBE = "nprobe"
+    NLIST = "nlist"
+    COSINE = "COSINE"
+    OBJECTS = "objects"
+    RANGE_FILTER = "range_filter"
 
 
 class EventFields:
@@ -272,6 +304,57 @@ def _log_execution_time(function_name: str, execution_time: float) -> None:
     sly.logger.debug("%.4f sec | %s", execution_time, function_name)
 
 
+def memoryit(func: Callable) -> Callable:
+    """Decorator to measure peak memory usage using tracemalloc."""
+
+    if asyncio.iscoroutinefunction(func):
+
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            if not tracemalloc.is_tracing():
+                tracemalloc.start()
+                started = True
+            else:
+                started = False
+
+            try:
+                result = await func(*args, **kwargs)
+
+                current, peak = tracemalloc.get_traced_memory()
+                peak_mb = peak / 1024 / 1024
+
+                sly.logger.debug("Peak memory: %.1f MB | %s", peak_mb, func.__name__)
+                return result
+            finally:
+                if started:
+                    tracemalloc.stop()
+
+        return async_wrapper
+    else:
+
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            if not tracemalloc.is_tracing():
+                tracemalloc.start()
+                started = True
+            else:
+                started = False
+
+            try:
+                result = func(*args, **kwargs)
+
+                current, peak = tracemalloc.get_traced_memory()
+                peak_mb = peak / 1024 / 1024
+
+                sly.logger.debug("Peak memory: %.1f MB | %s", peak_mb, func.__name__)
+                return result
+            finally:
+                if started:
+                    tracemalloc.stop()
+
+        return sync_wrapper
+
+
 def to_thread(func: Callable) -> Callable:
     """Decorator to run the function in a separate thread.
     Can be used for slow synchronous functions inside of the asynchronous code
@@ -337,7 +420,9 @@ def with_retries(retries: int = 3, sleep_time: int = 1, on_failure: Callable = N
 
 @to_thread
 @timeit
-def get_datasets(api: sly.Api, project_id: int, recursive: bool = False, filters: List[Dict[str, str]] = None) -> List[sly.DatasetInfo]:
+def get_datasets(
+    api: sly.Api, project_id: int, recursive: bool = False, filters: List[Dict[str, str]] = None
+) -> List[sly.DatasetInfo]:
     """Returns list of datasets from the project.
 
     :param api: Instance of supervisely API.
@@ -869,7 +954,7 @@ async def get_lite_object_infos(
     # ------------------ 1. If image_infos Are Provided, Build A Mapping By Dataset ------------------ #
     if image_infos is not None and len(image_infos) > 0:
         sly.logger.debug(f"{msg_prefix} Creating lite object infos from image_infos")
-        dataset_images_map = {} # Exists only if image_infos are provided
+        dataset_images_map = {}  # Exists only if image_infos are provided
         for image_info in image_infos:
             if image_info.dataset_id not in dataset_images_map:
                 dataset_images_map[image_info.dataset_id] = []

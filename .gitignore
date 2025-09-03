@@ -5,3 +5,4 @@ build.sh
 *test*
 *.md
 !README.md
+volumes/
