@@ -7,7 +7,7 @@ from supervisely.sly_logger import logger
 
 import src.cas as cas
 import src.globals as g
-import src.qdrant as qdrant
+import src.milvus as milvus
 from src.utils import (
     ImageInfoLite,
     ObjectInfoLite,
@@ -79,19 +79,19 @@ async def process_images(
     objects: bool = False,
 ) -> Tuple[List[sly.ImageInfo], List[List[float]]]:
     """Process images from the specified project. Download images, save them to HDF5,
-    get vectors from the images and upsert them to Qdrant.
+    get vectors from the images and upsert them to vector DB.
 
     :param api: Supervisely API object.
     :type api: sly.Api
     :param project_id: Project ID to process images from.
     :type project_id: int
-    :param to_create: List of image infos to create in Qdrant.
+    :param to_create: List of image infos to create in vector DB.
     :type to_create: List[sly.ImageInfo]
-    :param to_delete: List of image infos to delete from Qdrant.
+    :param to_delete: List of image infos to delete from vector DB.
     :type to_delete: List[sly.ImageInfo]
     :param return_vectors: If True, return vectors of the created images.
     :type return_vectors: bool
-    :param check_collection_exists: If True, check if the Qdrant collection exists.
+    :param check_collection_exists: If True, check if the vector DB collection exists.
     :type check_collection_exists: bool
     :return: Tuple of two lists: list of created image infos and list of vectors.
     :rtype: Tuple[List[sly.ImageInfo], List[List[float]]]
@@ -111,7 +111,7 @@ async def process_images(
         total_progress = len(to_create)
 
         if check_collection_exists:
-            await qdrant.get_or_create_collection(project_id, objects=objects)
+            await milvus.get_or_create_collection(project_id)
 
         current_progress = 0
 
@@ -141,8 +141,8 @@ async def process_images(
                 vectors_batch = fix_vectors(vectors_batch)
                 logger.debug(f"{msg_prefix} Got {len(vectors_batch)} vectors for {item_name}.")
 
-                # Upsert vectors to Qdrant.
-                await qdrant.upsert(project_id, vectors_batch, items_batch)
+                # Upsert vectors to vector DB.
+                await milvus.upsert(project_id, vectors_batch, items_batch)
 
                 if isinstance(items_batch[0], ImageInfoLite):
                     processed_items_num = len(items_batch)
@@ -155,7 +155,7 @@ async def process_images(
                 await update_processing_progress(project_id, current_progress, "processing")
 
                 logger.debug(
-                    f"{msg_prefix} Upserted {len(vectors_batch)} vectors to Qdrant. [{current_progress}/{total_progress}]",
+                    f"{msg_prefix} Upserted {len(vectors_batch)} vectors to vector DB. [{current_progress}/{total_progress}]",
                 )
                 await set_image_embeddings_updated_at(api, items_batch)
 
@@ -169,12 +169,12 @@ async def process_images(
         if len(to_delete) > 0:
             logger.debug(f"{msg_prefix} Vectors for {item_name} to be deleted: {len(to_delete)}.")
             for items_batch in sly.batched(to_delete):
-                # Delete embeddings from the Qdrant.
-                await qdrant.delete_collection_items(
-                    collection_name=project_id, items_info=items_batch, objects=objects
+                # Delete embeddings from the vector DB.
+                await milvus.delete_collection_items(
+                    collection_name=project_id, items_info=items_batch
                 )
                 await set_image_embeddings_updated_at(api, items_batch, [None] * len(items_batch))
-                logger.debug(f"{msg_prefix} Deleted {len(items_batch)} {item_name} from Qdrant.")
+                logger.debug(f"{msg_prefix} Deleted {len(items_batch)} {item_name} from vector DB.")
 
         logger.info(
             f"{msg_prefix} Embeddings Created: {len(to_create)}, Deleted: {len(to_delete)}."
@@ -208,7 +208,7 @@ async def update_embeddings(
 
     if force:
         logger.info(f"{msg_prefix} Force enabled, recreating embeddings for all images.")
-        await qdrant.delete_collection(project_id)
+        await milvus.delete_collection(project_id)
         # do not need to create collection here, it will be created in process_images
         images_to_create = await image_get_list_async(api, project_id)
         images_to_delete = []

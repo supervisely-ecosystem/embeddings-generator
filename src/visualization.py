@@ -10,7 +10,7 @@ from sklearn.cluster import KMeans
 from supervisely.api.file_api import FileInfo
 
 import src.globals as g
-import src.qdrant as qdrant
+import src.milvus as milvus
 from src.pointcloud import download as download_pcd
 from src.pointcloud import remove_pcd_file
 from src.pointcloud import upload as upload_pcd
@@ -101,7 +101,7 @@ async def create_projections(
     else:
         item_ids = [info.id for info in image_infos]
 
-    retrieved_item_info, vectors = await qdrant.get_items_by_id(
+    retrieved_item_info, vectors = await milvus.get_items_by_id(
         project_id, item_ids, with_vectors=True, objects=objects
     )
 

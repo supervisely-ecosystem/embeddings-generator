@@ -10,7 +10,7 @@ from supervisely.imaging.color import get_predefined_colors
 
 import src.cas as cas
 import src.globals as g
-import src.qdrant as qdrant
+import src.milvus as milvus
 from src.autorestart import EmbeddingsTaskManager
 from src.events import Event
 from src.functions import Document, process_images, update_embeddings
@@ -202,8 +202,8 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
             try:
                 # ----------------------- Step 3: If Force Is True, Delete The Collection. ----------------------- #
                 if event.force:
-                    sly.logger.debug(f"{msg_prefix} Force enabled, deleting qdrant collection.")
-                    await qdrant.delete_collection(event.project_id)
+                    sly.logger.debug(f"{msg_prefix} Force enabled, deleting Milvus collection.")
+                    await milvus.delete_collection(event.project_id)
 
                 # ---------------- Step 4: Process Images. Check And Create Collection If Needed. ---------------- #
                 items_info, vectors = await process_images(
@@ -309,7 +309,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             return validation_error
 
         # ----------------- Step 1: Initialise Collection Manager And List Of Image Infos ---------------- #
-        if await qdrant.collection_exists(event.project_id) is False:
+        if await milvus.collection_exists(event.project_id) is False:
             message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
             await clean_image_embeddings_updated_at(api, project_info.id)
@@ -369,7 +369,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             f"{msg_prefix} The query has been vectorized and will be used for search. Number of vectors: {len(query_vectors)}.",
         )
 
-        # -------------------------- Step 4: Search For Similar Images In Qdrant ------------------------- #
+        # ------------------------ Step 4: Search For Similar Images In Vector DB ------------------------ #
 
         tasks = []
 
@@ -377,7 +377,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
             collection: int, vector: np.ndarray, limit: int, query_filter, query
         ):
             return (
-                await qdrant.search(
+                await milvus.search(
                     collection_name=collection,
                     query_vector=vector,
                     limit=limit,
@@ -391,10 +391,10 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 
         if event.image_ids:
             # If image_ids are provided, create a filter for the search.
-            search_filter = qdrant.get_search_filter(image_ids=event.image_ids)
+            search_filter = milvus.get_search_filter(image_ids=event.image_ids)
         elif event.dataset_id:
             # If dataset_id is provided, create a filter for the search.
-            search_filter = qdrant.get_search_filter(dataset_id=event.dataset_id)
+            search_filter = milvus.get_search_filter(dataset_id=event.dataset_id)
 
         for vector, query in zip(query_vectors, queries):
             tasks.append(
@@ -412,13 +412,13 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
         results = {}
         for task in asyncio.as_completed(tasks):
             search_results, query = await task
-            items = search_results[qdrant.SearchResultField.ITEMS]
+            items = search_results[milvus.SearchResultField.ITEMS]
             if len(items) == 0:
                 sly.logger.debug(f"{msg_prefix} No similar images found for query {query}")
                 continue
             # items = [info.to_json() for info in items]
-            if search_results.get(qdrant.SearchResultField.SCORES, None) is not None:
-                for i, score in enumerate(search_results[qdrant.SearchResultField.SCORES]):
+            if search_results.get(milvus.SearchResultField.SCORES, None) is not None:
+                for i, score in enumerate(search_results[milvus.SearchResultField.SCORES]):
                     items[i].score = score
             else:
                 for i in range(len(items)):
@@ -464,7 +464,7 @@ async def search(api: sly.Api, event: Event.Search) -> List[List[Dict]]:
 async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
     """
     Generates a representative subset of images from a project by leveraging CLIP embeddings and clustering techniques.
-    It works by retrieving image vectors from Qdrant, sending them to a projections service that applies clustering algorithms (like KMeans),
+    It works by retrieving image vectors from DB, sending them to a projections service that applies clustering algorithms (like KMeans),
     and then returning a selection of images that maximally represent the visual diversity of the entire collection.
     This approach is particularly valuable for creating balanced training datasets, getting a quick overview of content variety,
     and identifying outliers without having to manually review the entire image collection.
@@ -500,16 +500,16 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
             return validation_error
 
         # ------------------------------ Step 1: Check If Collection Exists ------------------------------ #
-        if await qdrant.collection_exists(event.project_id) is False:
+        if await milvus.collection_exists(event.project_id) is False:
             message = f"{msg_prefix} Embeddings collection does not exist, search is not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
             await clean_image_embeddings_updated_at(api, project_info.id)
             await disable_embeddings(api, project_info.id)
             return JSONResponse({ResponseFields.MESSAGE: message}, status_code=404)
 
-        # ------------------------------------ Step 2: Get Image Vectors From Qdrant ------------------------------------ #
+        # --------------------------- Step 2: Get Image Vectors From Vector DB --------------------------- #
         if event.image_ids:
-            image_infos, vectors = await qdrant.get_items_by_id(
+            image_infos, vectors = await milvus.get_items_by_id(
                 event.project_id, event.image_ids, with_vectors=True
             )
         elif event.dataset_id:
@@ -517,11 +517,11 @@ async def diverse(api: sly.Api, event: Event.Diverse) -> List[ImageInfoLite]:
                 api, event.project_id, dataset_id=event.dataset_id
             )
             ids = [info.id for info in image_infos]
-            image_infos, vectors = await qdrant.get_items_by_id(
+            image_infos, vectors = await milvus.get_items_by_id(
                 event.project_id, ids, with_vectors=True
             )
         else:
-            image_infos, vectors = await qdrant.get_items(event.project_id, with_vectors=True)
+            image_infos, vectors = await milvus.get_items(event.project_id, with_vectors=True)
 
         if len(vectors) == 0:
             return JSONResponse({ResponseFields.MESSAGE: "No vectors found."})
@@ -722,12 +722,12 @@ async def health_check():
     checks = {}
     status_code = 200
     try:
-        # Check Qdrant connection
+        # Check Milvus connection
         try:
-            await qdrant.client.info()
-            checks["qdrant"] = "healthy"
+            await milvus.client.get_server_version()
+            checks["milvus"] = "healthy"
         except Exception as e:
-            checks["qdrant"] = f"unhealthy: {str(e)}"
+            checks["milvus"] = f"unhealthy: {str(e)}"
             status = "degraded"
             status_code = 503
 
@@ -830,11 +830,11 @@ async def clusters_event_endpoint(api: sly.Api, event: Event.Clusters):
         },
     )
     if event.image_ids:
-        image_infos, vectors = await qdrant.get_items_by_id(
+        image_infos, vectors = await milvus.get_items_by_id(
             event.project_id, event.image_ids, with_vectors=True
         )
     else:
-        image_infos, vectors = await qdrant.get_items(event.project_id, with_vectors=True)
+        image_infos, vectors = await milvus.get_items(event.project_id, with_vectors=True)
 
     data = {"vectors": vectors, "reduce": True}
     if event.reduction_dimensions:
@@ -929,7 +929,7 @@ async def projections_event_endpoint(api: sly.Api, event: Event.Projections):
             return validation_error
 
         # ------------------------------ Step 1: Check If Collection Exists ------------------------------ #
-        if await qdrant.collection_exists(event.project_id) is False:
+        if await milvus.collection_exists(event.project_id) is False:
             message = f"{msg_prefix} Embeddings collection does not exist, projections are not possible. Create embeddings first. Disabling AI Search."
             sly.logger.warning(message)
             await clean_image_embeddings_updated_at(api, project_info.id)

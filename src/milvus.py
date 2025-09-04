@@ -3,12 +3,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 import supervisely as sly
-from pymilvus import (
-    AsyncMilvusClient,
-    CollectionSchema,
-    DataType,
-    FieldSchema,
-)
+from pymilvus import AsyncMilvusClient, CollectionSchema, DataType, FieldSchema
 
 import src.globals as g
 from src.utils import (
@@ -39,27 +34,42 @@ def create_client_from_url(url: str) -> AsyncMilvusClient:
 
     # Create client with appropriate settings based on URL
     return AsyncMilvusClient(
-        uri=g.qdrant_host,
+        uri=g.milvis_host,
         pool_size=50,
         timeout=30,
     )
 
 
-client = create_client_from_url(g.qdrant_host)  # Reusing the same config variable
+client = create_client_from_url(g.milvis_host)
 
 
 try:
-    sly.logger.info(f"Connecting to Milvus at {g.qdrant_host}...")
+    sly.logger.info(f"Connecting to Milvus at {g.milvis_host}...")
     client.get_server_version()
     sly.logger.info(f"Milvus client configured successfully.")
 except Exception as e:
-    sly.logger.error(f"Failed to configure Milvus client for {g.qdrant_host}: {e}")
+    sly.logger.error(f"Failed to configure Milvus client for {g.milvis_host}: {e}")
 
 
 class SearchResultField:
     ITEMS = "items"
     VECTORS = "vectors"
     SCORES = "scores"
+
+
+def prepare_name(project_id: int) -> str:
+    """Prepare a valid collection name from the project ID.
+
+    :param project_id: The project ID to convert.
+    :type project_id: int
+    :return: A valid collection name.
+    :rtype: str
+    """
+    # Milvus collection names must start with a letter or underscore and contain only letters, numbers, and underscores.
+    name = str(project_id).replace("-", "_").replace(" ", "_")
+    if not name.startswith("_"):
+        name = f"_{name}"
+    return name
 
 
 def get_search_filter(
@@ -120,7 +130,11 @@ async def delete_collection_items(
         if isinstance(items_info[0], ObjectInfoLite):
             partition_name = MilvusParams.OBJECTS
 
-        return await client.delete(collection_name, ids=ids, partition_name=partition_name)
+        return await client.delete(
+            prepare_name(collection_name),
+            ids=ids,
+            partition_name=partition_name,
+        )
     except Exception as e:
         sly.logger.debug(
             f"[Project: {collection_name}] Something went wrong, while deleting {len(ids)} item(s) from Milvus collection: {e}"
@@ -153,12 +167,20 @@ async def get_or_create_collection(
     :rtype: Dict[str, Any]
     """
     msg_prefix = f"[Project: {collection_name}]"
-
+    prepared_name = prepare_name(collection_name)
     try:
-        if await client.has_collection(collection_name):
-            sly.logger.debug(f"{msg_prefix} Milvus collection already exists.")
-            return await client.describe_collection(collection_name)
+        exists = await client.has_collection(prepared_name)
+        if exists:
+            try:
+                await client.load_collection(prepared_name)
+                return await client.describe_collection(prepared_name)
+            except Exception as e:
+                sly.logger.warning(f"{msg_prefix} Failed to load existing collection: {e}")
+                # Try to drop and recreate if loading fails
+                await client.drop_collection(prepared_name)
+                sly.logger.debug(f"{msg_prefix} Dropped corrupted collection, will recreate")
 
+        sly.logger.debug(f"{msg_prefix} Creating new Milvus collection...")
         # Define schema based on whether it's for objects or images
         fields = [
             FieldSchema(name=MilvusFields.ID, dtype=DataType.INT64, is_primary=True, auto_id=False),
@@ -175,15 +197,17 @@ async def get_or_create_collection(
         )
 
         if params is None:
-            params = (
-                {"M": 16, "efConstruction": 200}
-                if index_type == MilvusParams.HNSW
-                else {MilvusParams.NLIST: 4096, MilvusParams.NPROBE: 64}
-            )
+            if index_type == MilvusParams.HNSW:
+                params = {"M": 16, "efConstruction": 200}
+            else:
+                params = {MilvusParams.NLIST: 4096, MilvusParams.NPROBE: 64}
 
+        sly.logger.debug(
+            f"{msg_prefix} Creating collection with index_type: {index_type}, distance: {distance}"
+        )
         # Create collection
         await client.create_collection(
-            collection_name=collection_name,
+            collection_name=prepared_name,
             schema=schema,
             index_params={
                 MilvusFields.FIELD_NAME: MilvusFields.VECTOR,
@@ -193,13 +217,20 @@ async def get_or_create_collection(
             },
         )
 
-        await client.create_partition(
-            collection_name=collection_name,
-            partition_name=MilvusParams.OBJECTS,
-        )
+        try:
+            await client.create_partition(
+                collection_name=prepared_name,
+                partition_name=MilvusParams.OBJECTS,
+            )
+            sly.logger.debug(f"{msg_prefix} Created objects partition")
+        except Exception as e:
+            sly.logger.warning(f"{msg_prefix} Failed to create objects partition: {e}")
 
-        sly.logger.debug(f"{msg_prefix} Milvus collection created with indexed fields.")
-        collection_info = await client.describe_collection(collection_name)
+        # Load the collection
+        await client.load_collection(prepared_name)
+        sly.logger.debug(f"{msg_prefix} Milvus collection created and loaded with indexed fields.")
+
+        collection_info = await client.describe_collection(prepared_name)
         return collection_info
     except Exception as e:
         sly.logger.error(f"{msg_prefix} Error creating/getting collection: {e}")
@@ -215,7 +246,7 @@ async def collection_exists(collection_name: str) -> bool:
     :rtype: bool
     """
     try:
-        exists = await client.has_collection(collection_name)
+        exists = await client.has_collection(prepare_name(collection_name))
         return exists
     except Exception:
         return False
@@ -251,11 +282,11 @@ async def upsert(
         data.append(record)
 
     # Insert data into collection
-    await client.upsert(collection_name=collection_name, data=data)
+    await client.upsert(collection_name=prepare_name(collection_name), data=data)
 
     if sly.is_development():
         # Check collection stats
-        stats = await client.get_collection_stats(collection_name)
+        stats = await client.get_collection_stats(prepare_name(collection_name))
         sly.logger.debug(f"{msg_prefix} Milvus Collection has {stats['row_count']} vectors.")
 
 
@@ -308,7 +339,7 @@ async def search(
         output_fields.append(MilvusFields.VECTOR)
 
     response = await client.search(
-        collection_name=collection_name,
+        collection_name=prepare_name(collection_name),
         data=[query_vector.tolist()],
         anns_field=MilvusFields.VECTOR,
         search_params=search_params,
@@ -387,7 +418,7 @@ async def get_items(
     """
 
     # Get collection stats to determine total count
-    stats = await client.get_collection_stats(collection_name)
+    stats = await client.get_collection_stats(prepare_name(collection_name))
     total_count = stats.get("row_count", 0)
 
     if not limit:
@@ -425,7 +456,7 @@ async def get_items(
         try:
             # Query current batch
             batch_results = await client.query(
-                collection_name=collection_name,
+                collection_name=prepare_name(collection_name),
                 expr="",
                 output_fields=output_fields,
                 offset=offset,
@@ -526,7 +557,7 @@ async def get_items_by_id(
         output_fields.extend([MilvusFields.IMAGE_ID, MilvusFields.CLASS_ID])
 
     results = await client.get(
-        collection_name=collection_name,
+        collection_name=prepare_name(collection_name),
         ids=item_ids,
         output_fields=output_fields,
         partition_names=partition_names,
@@ -574,6 +605,6 @@ async def delete_collection(collection_name: str) -> None:
     sly.logger.debug(f"[Project: {collection_name}] Deleting Milvus collection...")
 
     try:
-        await client.drop_collection(collection_name)
+        await client.drop_collection(prepare_name(collection_name))
     except Exception as e:
         sly.logger.debug(f"[Project: {collection_name}] Unable to delete Milvus collection: {e}")
