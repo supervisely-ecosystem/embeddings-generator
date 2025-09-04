@@ -1,7 +1,9 @@
 pydantic==1.10.8
-supervisely==6.73.420
+supervisely==6.73.434
 clip-client==0.8.3
 qdrant-client==1.12.1
+grpcio-tools
+pymilvus==2.5.15
 pympler==1.0.1
 apscheduler==3.11.0
 bokeh==3.1.1
