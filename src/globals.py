@@ -62,7 +62,7 @@ if not milvus_host:
     raise ValueError("MILVUS_HOST is not set in the environment variables")
 
 
-sly.logger.info("Qdrant host: %s", milvus_host)
+sly.logger.info("Milvus host: %s", milvus_host)
 sly.logger.info("CLIP Service app host from environment: %s", clip_host)
 sly.logger.info("Supervisely network server address: %s", net_server_address)
 if clip_host is not None and clip_host != "" and net_server_address is not None:

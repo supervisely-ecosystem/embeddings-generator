@@ -13,8 +13,8 @@ from src.utils import (
     MilvusParams,
     ObjectInfoLite,
     TupleFields,
-    timeit,
     memoryit,
+    timeit,
     with_retries,
 )
 
@@ -44,13 +44,43 @@ def create_client_from_url(url: str) -> AsyncMilvusClient:
 
 client = create_client_from_url(g.milvus_host)
 
+# Global flag to track connection status
+_connection_verified = False
 
-try:
-    sly.logger.info(f"Connecting to Milvus at {g.milvus_host}...")
-    sly.run_coroutine(client.get_server_version())
-    sly.logger.info(f"Milvus client configured successfully.")
-except Exception as e:
-    sly.logger.error(f"Failed to configure Milvus client for {g.milvus_host}: {e}")
+
+def ensure_connection(func):
+    """Decorator to ensure Milvus connection is established before function execution.
+    Connection check is performed only once on first call.
+    """
+
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        global _connection_verified
+
+        if not _connection_verified:
+            try:
+                await client.get_server_version()
+                sly.logger.debug("Milvus client connection verified.")
+                _connection_verified = True
+            except Exception as e:
+                sly.logger.error(f"Failed to connect to Milvus at {g.milvus_host}: {e}")
+                raise
+
+        return await func(*args, **kwargs)
+
+    return wrapper
+
+
+# Import functools.wraps for the decorator
+from functools import wraps
+
+# Remove the immediate connection check from module import
+# try:
+#     sly.logger.info(f"Connecting to Milvus at {g.milvus_host}...")
+#     check_connection()
+#     sly.logger.info(f"Milvus client configured successfully.")
+# except Exception as e:
+#     sly.logger.error(f"Failed to configure Milvus client for {g.milvus_host}: {e}")
 
 
 class SearchResultField:
@@ -106,6 +136,7 @@ def get_search_filter(
     return filter_template, filter_params
 
 
+@ensure_connection
 @with_retries()
 async def delete_collection_items(
     collection_name: str,
@@ -143,6 +174,7 @@ async def delete_collection_items(
         )
 
 
+@ensure_connection
 @with_retries()
 @timeit
 async def get_or_create_collection(
@@ -190,8 +222,8 @@ async def get_or_create_collection(
             FieldSchema(name=MilvusFields.DATASET_ID, dtype=DataType.INT64),
             FieldSchema(name=MilvusFields.FULL_URL, dtype=DataType.VARCHAR, max_length=1000),
             FieldSchema(name=MilvusFields.CAS_URL, dtype=DataType.VARCHAR, max_length=1000),
-            FieldSchema(name=MilvusFields.IMAGE_ID, dtype=DataType.INT64),
-            FieldSchema(name=MilvusFields.CLASS_ID, dtype=DataType.INT64),
+            FieldSchema(name=MilvusFields.IMAGE_ID, dtype=DataType.INT64, nullable=True),
+            FieldSchema(name=MilvusFields.CLASS_ID, dtype=DataType.INT64, nullable=True),
         ]
 
         schema = CollectionSchema(
@@ -248,6 +280,7 @@ async def get_or_create_collection(
         raise
 
 
+@ensure_connection
 async def collection_exists(collection_name: str) -> bool:
     """Check if a collection with the specified name exists.
 
@@ -263,6 +296,7 @@ async def collection_exists(collection_name: str) -> bool:
         return False
 
 
+@ensure_connection
 @with_retries(retries=5, sleep_time=2)
 @timeit
 async def upsert(
@@ -289,7 +323,7 @@ async def upsert(
         # Remove score from vector_info as they are handled separately
         vector_info.pop(TupleFields.SCORE, None)
 
-        record = {MilvusFields.VECTOR: vector.tolist(), **vector_info}
+        record = {MilvusFields.VECTOR: vector, **vector_info}
         data.append(record)
 
     # Insert data into collection
@@ -301,6 +335,7 @@ async def upsert(
         sly.logger.debug(f"{msg_prefix} Milvus Collection has {stats['row_count']} vectors.")
 
 
+@ensure_connection
 @with_retries()
 @timeit
 @memoryit
@@ -355,7 +390,7 @@ async def search(
 
     response = await client.search(
         collection_name=prepared_name,
-        data=[query_vector.tolist()],
+        data=[query_vector],
         anns_field=MilvusFields.VECTOR,
         search_params=search_params,
         limit=limit,
@@ -371,14 +406,13 @@ async def search(
     # Convert results to ImageInfoLite objects
     items = []
     for hit in response:
-        # Milvus returns distance, convert to similarity score (1 - distance for cosine)
-        distance = hit.get(MilvusFields.DISTANCE, 0)
-        similarity_score = 1.0 - distance if distance is not None else 0.0
+        # Milvus with COSINE returns similarity score directly (higher is better)
+        # For other metrics it would return distance (lower is better)
+        similarity_score = hit.get(MilvusFields.DISTANCE, 0.0)
 
-        # Handle score threshold (convert threshold to distance for comparison)
+        # Handle score threshold (for COSINE, score is similarity directly)
         if score_threshold is not None:
-            distance_threshold = 1.0 - score_threshold
-            if distance > distance_threshold:
+            if similarity_score < score_threshold:
                 continue
 
         # Extract entity data - Milvus structure is different
@@ -401,14 +435,13 @@ async def search(
         ]
 
     if return_scores:
-        # Return similarity scores (converted from distances)
-        result[SearchResultField.SCORES] = [
-            1.0 - hit.get(MilvusFields.DISTANCE, 0) for hit in response
-        ]
+        # Return similarity scores directly for COSINE metric
+        result[SearchResultField.SCORES] = [hit.get(MilvusFields.DISTANCE, 0.0) for hit in response]
 
     return result
 
 
+@ensure_connection
 @with_retries()
 @timeit
 @memoryit
@@ -542,6 +575,7 @@ async def get_items(
     return items_info, vectors
 
 
+@ensure_connection
 @with_retries()
 @timeit
 @memoryit
@@ -624,6 +658,7 @@ async def get_items_by_id(
     return item_infos, vectors
 
 
+@ensure_connection
 @with_retries()
 async def delete_collection(collection_name: str) -> None:
     """Delete a collection with the specified name.

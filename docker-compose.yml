@@ -29,7 +29,7 @@ services:
       SUPERVISELY_NET_SERVER_ADDRESS: "${SUPERVISELY_NET_SERVER_ADDRESS}" # Supervisely network endpoint, e.g. http://sly-net-server
       SUPERVISELY_API_ACCESS_TOKEN: "${SUPERVISELY_API_ACCESS_TOKEN}" # access token for Supervisely API
       API_TOKEN: "${API_TOKEN}" # you could set token for both publick and internal addresses, in case of internal address it will skip retrieving token from the server
-      MILVUS_HOST: "http://10.62.10.13:34603"
+      MILVUS_HOST: "${MILVUS_HOST}" # Milvus service, e.g. http://milvus-local:19530
       CLIP_HOST: "${CLIP_HOST}" # CLIP application service, using local service from docker-compose
       IMGPROXY_ADDRESS: "${IMGPROXY_ADDRESS}" # Imgproxy service, e.g. http://imgproxy/
       IMGPROXY_CONCURRENCY: "${IMGPROXY_CONCURRENCY}" # concurrency for Imgproxy service
@@ -61,7 +61,7 @@ services:
     #  SUPERVISELY_NET_SERVER_ADDRESS: "${SUPERVISELY_NET_SERVER_ADDRESS}" # Supervisely network endpoint, e.g. http://sly-net-server
     #  SUPERVISELY_API_ACCESS_TOKEN: "${SUPERVISELY_API_ACCESS_TOKEN}" # access token for Supervisely API
     #  API_TOKEN: "${API_TOKEN}" # you could set token for both publick and internal addresses, in case of internal address it will skip retrieving token from the server
-    #  MILVUS_HOST: "http://10.62.10.13:34603"
+    #  MILVUS_HOST: "${MILVUS_HOST}" # Milvus service, e.g. http://milvus-local:19530
     #  CLIP_HOST: "${CLIP_HOST}" # CLIP application service, using local service from docker-compose
     #  GENERATOR_HOST: "embeddings-generator" # embeddings generator service, must be provided
     #  IMGPROXY_ADDRESS: "${IMGPROXY_ADDRESS}" # Imgproxy service, e.g. http://imgproxy/

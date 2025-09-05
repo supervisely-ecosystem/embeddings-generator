@@ -15,8 +15,7 @@ import aiohttp
 import supervisely as sly
 from supervisely._utils import batched
 from supervisely.api.app_api import SessionInfo
-from supervisely.api.entities_collection_api import (CollectionItem,
-                                                     CollectionType)
+from supervisely.api.entities_collection_api import CollectionItem, CollectionType
 from supervisely.api.module_api import ApiField
 
 PROJECTIONS_SLUG = "supervisely-ecosystem/projections_service"
@@ -46,22 +45,6 @@ class TupleFields:
     IMAGES = "images"
     SCORE = "score"
     BBOX = "bbox"
-
-
-class QdrantFields:
-    """Fields for the queries to the Qdrant API."""
-
-    KMEANS = "kmeans"
-    NUM_CLUSTERS = "num_clusters"
-    OPTION = "option"
-    RANDOM = "random"
-    CENTROIDS = "centroids"
-
-    # Payload Fields
-    DATASET_ID = "dataset_id"
-    IMAGE_ID = "image_id"
-    CLASS_ID = "class_id"
-    ID = "id"
 
 
 class MilvusFields:
@@ -193,16 +176,16 @@ class ImageInfoLite:
     dataset_id: int
     full_url: str
     cas_url: str
-    updated_at: str  # or datetime.datetime if you parse it
     score: float = None
 
     def to_json(self):
         return {
             TupleFields.ID: self.id,
+            TupleFields.IMAGE_ID: None,
+            TupleFields.CLASS_ID: None,
             TupleFields.DATASET_ID: self.dataset_id,
             TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
-            TupleFields.UPDATED_AT: self.updated_at,
             TupleFields.SCORE: self.score,
         }
         # Alternative: return asdict(self)  # if field names match keys
@@ -211,10 +194,11 @@ class ImageInfoLite:
     def from_json(cls, data: dict):
         return cls(
             id=data[TupleFields.ID],
+            image_id=None,
+            class_id=None,
             dataset_id=data[TupleFields.DATASET_ID],
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
-            updated_at=data[TupleFields.UPDATED_AT],
             score=data.get(TupleFields.SCORE, None),
         )
 
@@ -225,7 +209,6 @@ class ObjectInfoLite:
     image_id: int
     dataset_id: int
     class_id: Dict
-    # bbox: List[int]
     full_url: str
     cas_url: str
     score: float = None
@@ -236,7 +219,6 @@ class ObjectInfoLite:
             TupleFields.IMAGE_ID: self.image_id,
             TupleFields.DATASET_ID: self.dataset_id,
             TupleFields.CLASS_ID: self.class_id,
-            # TupleFields.BBOX: self.bbox,
             TupleFields.FULL_URL: self.full_url,
             TupleFields.CAS_URL: self.cas_url,
             TupleFields.SCORE: self.score,
@@ -250,7 +232,6 @@ class ObjectInfoLite:
             image_id=data[TupleFields.IMAGE_ID],
             dataset_id=data[TupleFields.DATASET_ID],
             class_id=data[TupleFields.CLASS_ID],
-            # bbox=data[TupleFields.BBOX],
             full_url=data[TupleFields.FULL_URL],
             cas_url=data[TupleFields.CAS_URL],
             score=data.get(TupleFields.SCORE, None),
@@ -689,7 +670,6 @@ async def create_lite_image_infos(
                 dataset_id=image_info.dataset_id,
                 full_url=image_info.full_storage_url,
                 cas_url=cas_url,
-                updated_at=image_info.updated_at,
             )
         )
     return images_list
@@ -1963,7 +1943,4 @@ def set_embeddings_type(api: sly.Api, project_id: int, objects: bool = False):
     custom_data = api.project.get_custom_data(project_id)
     custom_data[CustomDataFields.EMBEDDINGS_TYPE] = embeddings_type
     api.project.update_custom_data(project_id, custom_data, silent=True)
-    sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")
-    sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")
-    sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")
     sly.logger.debug(f"[Project: {project_id}] Set embeddings type to '{embeddings_type}'")

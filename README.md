@@ -25,7 +25,7 @@ Key features:
 -   **Instance-level service**: Runs as a system container for the entire Supervisely instance.
 -   **RESTful API**: Provides HTTP endpoints for embeddings generation and semantic search.
 -   **CLIP Service integration**: High-quality image embeddings using state-of-the-art CLIP models.
--   **Qdrant integration**: Efficient vector database for embedding storage and retrieval.
+-   **Milvus integration**: Efficient vector database for embedding storage and retrieval.
 -   **Semantic search capabilities**: Text-to-image and image-to-image search functionality.
 -   **Diverse selection**: Advanced clustering algorithms for selecting diverse image subsets.
 -   **Zero-downtime operation**: Runs continuously in the background as a headless service.
@@ -43,7 +43,7 @@ The application uses a containerized microservice architecture with RESTful API 
 
 -   **Containerized Service**: Runs as a Docker container at the instance level.
 -   **CLIP Service**: Generates high-quality embeddings using CLIP models.
--   **Qdrant Integration**: Efficiently stores and manages vector embeddings.
+-   **Milvus Integration**: Efficiently stores and manages vector embeddings.
 -   **RESTful API**: Simple HTTP endpoints for easy integration with external systems.
 -   **Background Processing**: Headless service with automatic embedding management.
 -   **Multi-project Support**: Handles multiple projects concurrently.
@@ -55,7 +55,7 @@ The application uses a containerized microservice architecture with RESTful API 
 -   Supervisely instance with admin access.
 -   Docker environment for container deployment.
 -   Running CLIP as Service instance (task ID or service endpoint).
--   Qdrant vector database instance (URL).
+-   Milvus vector database instance (URL).
 
 ### Environment Variables
 
@@ -63,7 +63,7 @@ Configure the service using the environment variables in `docker-compose.yml`.
 
 ### Configuration
 
--   **Qdrant DB**: Full URL including protocol (https/http) and port (e.g., `https://192.168.1.1:6333`).
+-   **Milvus DB**: Full URL including protocol (https/http) and port (e.g., `https://192.168.1.1:19530`).
 -   **CLIP Service**: Task ID for CLIP as Service session or its host including port (e.g., `1234` or `https://192.168.1.1:51000`).
 
 The service starts automatically on instance startup and provides API endpoints for all projects in the Supervisely instance.
