@@ -51,18 +51,18 @@ api = sly.Api(ignore_task_id=True, token=token)
 sly.logger.debug("Connected to Supervisely API: %s", api.server_address)
 
 # region envvars
-milvis_host = os.getenv("MILVUS_HOST")
+milvus_host = os.getenv("MILVUS_HOST")
 clip_host = os.getenv("CLIP_HOST", None)
 net_server_address = os.getenv("SUPERVISELY_NET_SERVER_ADDRESS", None)
 imgproxy_address = os.getenv("IMGPROXY_ADDRESS", None)
 imgproxy_concurrency = os.getenv("IMGPROXY_CONCURRENCY", 2)
 # endregion
 
-if not milvis_host:
+if not milvus_host:
     raise ValueError("MILVUS_HOST is not set in the environment variables")
 
 
-sly.logger.info("Qdrant host: %s", milvis_host)
+sly.logger.info("Qdrant host: %s", milvus_host)
 sly.logger.info("CLIP Service app host from environment: %s", clip_host)
 sly.logger.info("Supervisely network server address: %s", net_server_address)
 if clip_host is not None and clip_host != "" and net_server_address is not None:

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
@@ -13,6 +14,7 @@ from src.utils import (
     ObjectInfoLite,
     TupleFields,
     timeit,
+    memoryit,
     with_retries,
 )
 
@@ -34,21 +36,21 @@ def create_client_from_url(url: str) -> AsyncMilvusClient:
 
     # Create client with appropriate settings based on URL
     return AsyncMilvusClient(
-        uri=g.milvis_host,
+        uri=g.milvus_host,
         pool_size=50,
         timeout=30,
     )
 
 
-client = create_client_from_url(g.milvis_host)
+client = create_client_from_url(g.milvus_host)
 
 
 try:
-    sly.logger.info(f"Connecting to Milvus at {g.milvis_host}...")
-    client.get_server_version()
+    sly.logger.info(f"Connecting to Milvus at {g.milvus_host}...")
+    sly.run_coroutine(client.get_server_version())
     sly.logger.info(f"Milvus client configured successfully.")
 except Exception as e:
-    sly.logger.error(f"Failed to configure Milvus client for {g.milvis_host}: {e}")
+    sly.logger.error(f"Failed to configure Milvus client for {g.milvus_host}: {e}")
 
 
 class SearchResultField:
@@ -172,8 +174,8 @@ async def get_or_create_collection(
         exists = await client.has_collection(prepared_name)
         if exists:
             try:
-                await client.load_collection(prepared_name)
-                return await client.describe_collection(prepared_name)
+                info = await client.describe_collection(prepared_name)
+                return info
             except Exception as e:
                 sly.logger.warning(f"{msg_prefix} Failed to load existing collection: {e}")
                 # Try to drop and recreate if loading fails
@@ -205,16 +207,25 @@ async def get_or_create_collection(
         sly.logger.debug(
             f"{msg_prefix} Creating collection with index_type: {index_type}, distance: {distance}"
         )
+
+        # Create index parameters
+        index_params = client.prepare_index_params()
+        index_params.add_index(
+            field_name=MilvusFields.VECTOR,
+            index_type=index_type,
+            metric_type=distance,
+            params=params,
+        )
+        # Add indexes for scalar fields to improve filtering performance
+        index_params.add_index(field_name=MilvusFields.DATASET_ID, index_type="AUTOINDEX")
+        index_params.add_index(field_name=MilvusFields.IMAGE_ID, index_type="AUTOINDEX")
+        index_params.add_index(field_name=MilvusFields.CLASS_ID, index_type="AUTOINDEX")
+
         # Create collection
         await client.create_collection(
             collection_name=prepared_name,
             schema=schema,
-            index_params={
-                MilvusFields.FIELD_NAME: MilvusFields.VECTOR,
-                MilvusFields.INDEX_TYPE: index_type,
-                MilvusFields.METRIC_TYPE: distance,
-                MilvusFields.PARAMS: params,
-            },
+            index_params=index_params,
         )
 
         try:
@@ -292,6 +303,7 @@ async def upsert(
 
 @with_retries()
 @timeit
+@memoryit
 async def search(
     collection_name: str,
     query_vector: np.ndarray,
@@ -323,6 +335,7 @@ async def search(
     :return: A dictionary with keys "items", "vectors" and "scores".
     :rtype: Dict[str, Union[List[ImageInfoLite], List[np.ndarray]]]
     """
+    prepared_name = prepare_name(collection_name)
 
     search_params = {
         MilvusFields.METRIC_TYPE: MilvusParams.COSINE,
@@ -338,8 +351,10 @@ async def search(
     if return_vectors:
         output_fields.append(MilvusFields.VECTOR)
 
+    await client.load_collection(prepared_name)
+
     response = await client.search(
-        collection_name=prepare_name(collection_name),
+        collection_name=prepared_name,
         data=[query_vector.tolist()],
         anns_field=MilvusFields.VECTOR,
         search_params=search_params,
@@ -348,6 +363,8 @@ async def search(
         filter_params=query_filter[1] if query_filter else {},
         output_fields=output_fields,
     )
+    await client.release_collection(prepared_name)
+
     response = response[0] if response else []
     result = {}
 
@@ -394,6 +411,7 @@ async def search(
 
 @with_retries()
 @timeit
+@memoryit
 async def get_items(
     collection_name: str,
     limit: int = None,
@@ -416,9 +434,9 @@ async def get_items(
     :return: A tuple of two lists: list of ImageInfoLite or ObjectInfoLite objects and list of vectors.
     :rtype: Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[np.ndarray]]
     """
-
+    prepared_name = prepare_name(collection_name)
     # Get collection stats to determine total count
-    stats = await client.get_collection_stats(prepare_name(collection_name))
+    stats = await client.get_collection_stats(prepared_name)
     total_count = stats.get("row_count", 0)
 
     if not limit:
@@ -448,6 +466,9 @@ async def get_items(
 
     # Process data in batches with offset pagination
     offset = 0
+
+    await client.load_collection(prepared_name)
+
     while retrieved_count < actual_limit:
         # Calculate the limit for this batch
         remaining_items = actual_limit - retrieved_count
@@ -456,7 +477,7 @@ async def get_items(
         try:
             # Query current batch
             batch_results = await client.query(
-                collection_name=prepare_name(collection_name),
+                collection_name=prepared_name,
                 expr="",
                 output_fields=output_fields,
                 offset=offset,
@@ -510,8 +531,10 @@ async def get_items(
             sly.logger.error(
                 f"[Project: {collection_name}] Error retrieving batch at offset {offset}: {e}"
             )
+            await client.release_collection(prepared_name)
             break
 
+    await client.release_collection(prepared_name)
     sly.logger.debug(
         f"[Project: {collection_name}] Retrieved {len(items_info)} points from Milvus collection."
     )
@@ -521,6 +544,7 @@ async def get_items(
 
 @with_retries()
 @timeit
+@memoryit
 async def get_items_by_id(
     collection_name: str,
     item_ids: List[int],
@@ -540,6 +564,7 @@ async def get_items_by_id(
     :return: A tuple of ImageInfoLite or ObjectInfoLite objects and vectors.
     :rtype: Tuple[List[Union[ImageInfoLite, ObjectInfoLite]], List[np.ndarray]]
     """
+    prepared_name = prepare_name(collection_name)
 
     partition_names = None
     if objects:
@@ -556,12 +581,16 @@ async def get_items_by_id(
     if objects:
         output_fields.extend([MilvusFields.IMAGE_ID, MilvusFields.CLASS_ID])
 
+    await client.load_collection(prepared_name)
+
     results = await client.get(
-        collection_name=prepare_name(collection_name),
+        collection_name=prepared_name,
         ids=item_ids,
         output_fields=output_fields,
         partition_names=partition_names,
     )
+
+    await client.release_collection(prepared_name)
 
     item_infos = []
     vectors = []
