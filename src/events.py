@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from src.utils import ClusteringMethods, EventFields, SamplingMethods
 
@@ -13,13 +13,13 @@ class Event:
             force: Optional[bool],
             image_ids: Optional[List[int]],
             return_vectors: Optional[bool] = False,
-            objects: Optional[bool] = False,
+            items: Optional[Literal["all", "images", "objects"]] = "all",
         ):
             self.project_id = project_id
             self.force = force
             self.image_ids = image_ids
             self.return_vectors = return_vectors
-            self.objects = objects
+            self.items = items
 
         @classmethod
         def from_json(cls, data: Dict[str, Any]):
@@ -28,7 +28,7 @@ class Event:
                 data.get(EventFields.FORCE),
                 data.get(EventFields.IMAGE_IDS),
                 data.get(EventFields.RETURN_VECTORS),
-                data.get(EventFields.OBJECTS),
+                data.get(EventFields.ITEMS, "all"),
             )
 
     class Search:

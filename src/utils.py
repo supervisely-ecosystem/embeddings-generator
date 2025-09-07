@@ -97,6 +97,7 @@ class EventFields:
     RETURN_VECTORS = "return_vectors"
     THRESHOLD = "threshold"
     OBJECTS = "objects"
+    ITEMS = "items"
 
     ATLAS = "atlas"
     POINTCLOUD = "pointcloud"

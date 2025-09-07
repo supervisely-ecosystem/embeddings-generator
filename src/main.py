@@ -110,7 +110,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 "force": event.force,
                 "return_vectors": event.return_vectors,
                 "image_ids": event.image_ids,
-                "objects": event.objects,
+                "items": event.items,
             },
         )
 
@@ -212,7 +212,7 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                     to_create=images_to_create,
                     to_delete=images_to_delete,
                     return_vectors=event.return_vectors,
-                    objects=event.objects,
+                    items=event.items,
                 )
                 await set_project_embeddings_updated_at(api, event.project_id)
                 await set_embeddings_type(api, event.project_id, event.objects)
@@ -220,8 +220,8 @@ async def create_embeddings(api: sly.Api, event: Event.Embeddings) -> None:
                 # Clean up resources before returning
                 await cleanup_task_resources()
 
-                if event.return_vectors:
-                    item_name = "objects" if event.objects else "images"
+                if event.return_vectors:  #! fix this section
+                    item_name = "objects" if event.items else "images"
                     response_field = (
                         ResponseFields.OBJECT_IDS if event.objects else ResponseFields.IMAGE_IDS
                     )
